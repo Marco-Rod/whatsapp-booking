@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 from unittest.mock import AsyncMock
 
 import httpx
@@ -32,7 +34,7 @@ def envelope(text="hola", message_id="wamid.test"):
 async def webhook(booking_client):
     client, sessions, postgres = booking_client
     config = Settings(_env_file=None, whatsapp_verify_token="test-verify", whatsapp_access_token="test-token",
-                      whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0")
+                      whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0", meta_app_secret="test-app-secret")
     sender = AsyncMock(spec=WhatsAppClient)
     calls = []
     fault = {"after_engine": False}
@@ -54,9 +56,15 @@ async def webhook(booking_client):
 
     app.dependency_overrides[get_webhook_service] = service
     app.dependency_overrides[get_whatsapp_settings] = lambda: config
+    async def sign_request(request):
+        if request.method == "POST" and request.url.path == URL:
+            request.headers["X-Hub-Signature-256"] = "sha256=" + hmac.new(
+                b"test-app-secret", request.content, hashlib.sha256).hexdigest()
+    client.event_hooks["request"].append(sign_request)
     try:
         yield client, sessions, sender, calls, fault, postgres
     finally:
+        client.event_hooks["request"].remove(sign_request)
         app.dependency_overrides.pop(get_webhook_service, None)
         app.dependency_overrides.pop(get_whatsapp_settings, None)
 

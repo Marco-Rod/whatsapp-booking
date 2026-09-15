@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     whatsapp_access_token: SecretStr = SecretStr("")
     whatsapp_phone_number_id: str = ""
     whatsapp_api_version: str = ""
+    meta_app_secret: SecretStr = SecretStr("")
 
 
 settings = Settings()

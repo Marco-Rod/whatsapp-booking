@@ -1,4 +1,4 @@
-# Booking Core — Día 3, checkpoint 2: WhatsApp Gateway
+# Booking Core — Día 3, checkpoint 2.5: firma del webhook
 
 FastAPI + SQLAlchemy async + PostgreSQL + Alembic. Consulta disponibilidad de un
 servicio según el horario semanal y las citas pendientes o confirmadas.
@@ -254,7 +254,25 @@ rollback completo, fallos de envío y recuperación parcial.
 Referencias de contrato: [payloads oficiales de Meta](https://www.postman.com/meta/whatsapp-business-platform/folder/tduohwq/webhook-payload-reference)
 y [API de mensajes](https://www.postman.com/meta/whatsapp-business-platform/folder/o48mro7/messages).
 
-Este checkpoint permanece local, como los anteriores. Antes de publicar el webhook
-en el checkpoint 3 faltan configurar Meta, autenticar POST con la firma de Meta y
-App Secret, y probar recepción/envío desde un teléfono. El verify token del GET
-no autentica el POST. No se ha configurado una URL pública ni realizado envíos reales.
+### Checkpoint 2.5: autenticación del POST
+
+`META_APP_SECRET` se configura como secreto en `.env` y se pasa al contenedor por
+Compose. Es el App Secret de Meta, distinto del access token y del verify token.
+No se incluye ningún valor real en el repositorio.
+
+Antes de parsear JSON, el POST calcula HMAC SHA-256 sobre los bytes originales de
+la petición y valida `X-Hub-Signature-256: sha256=<digest hexadecimal>` mediante
+comparación en tiempo constante. No se reserializa el JSON para verificarlo.
+
+- Firma correcta: continúa el procesamiento normal.
+- Firma ausente, mal formada, incorrecta o cuerpo modificado: 403, sin procesar.
+- `META_APP_SECRET` vacío: 503, sin procesar (fail closed).
+- Firma válida con JSON inválido: 400.
+
+Las pruebas del gateway firman sus requests. `tests/test_whatsapp_signature.py`
+prueba además que un rechazo no invoca WebhookService, incluso con JSON inválido.
+La verificación GET conserva su contrato y utiliza `WHATSAPP_VERIFY_TOKEN`.
+
+Antes del checkpoint 3 faltan configurar los secretos reales, el número receptor
+y una URL HTTPS, y probar recepción/envío desde un teléfono. No se ha configurado
+una URL pública ni realizado envíos reales.
