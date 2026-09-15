@@ -1,5 +1,6 @@
 from datetime import datetime, time
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Time, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from app.models.types import UTCDateTime
 
@@ -75,3 +76,28 @@ class Appointment(Timestamps, Base):
     # Day-one intervals have no customer; all new bookings require one in the service.
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     customer: Mapped[Customer | None] = relationship(back_populates="appointments")
+
+
+class Conversation(Timestamps, Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        UniqueConstraint("business_id", "phone", name="uq_conversation_business_phone"),
+        CheckConstraint("state IN ('main_menu', 'select_service', 'select_date', 'select_time', 'confirm_appointment')", name="ck_conversation_state"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"))
+    phone: Mapped[str] = mapped_column(String(30))
+    state: Mapped[str] = mapped_column(String(30), default="main_menu")
+    context: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), default=dict)
+
+
+class InboundMessage(Base):
+    __tablename__ = "inbound_messages"
+    __table_args__ = (UniqueConstraint("business_id", "external_message_id", name="uq_inbound_business_external"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"))
+    external_message_id: Mapped[str] = mapped_column(String(255))
+    phone: Mapped[str] = mapped_column(String(30))
+    payload: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

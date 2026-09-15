@@ -1,4 +1,4 @@
-# Booking Core — Día 2, ciclo de reservas
+# Booking Core — Día 3, checkpoint 1: Conversation Engine
 
 FastAPI + SQLAlchemy async + PostgreSQL + Alembic. Consulta disponibilidad de un
 servicio según el horario semanal y las citas pendientes o confirmadas.
@@ -141,3 +141,55 @@ No se requiere una migración adicional para este checkpoint.
 Las pruebas PostgreSQL cubren también reprogramaciones simultáneas al mismo slot,
 CREATE contra RESCHEDULE, CANCEL contra RESCHEDULE y conservación de ambas citas
 cuando una intenta moverse al horario de otra.
+
+## Día 3: conversación sin Meta
+
+La migración `0003` añade Conversation (una por negocio/teléfono) e InboundMessage
+con `UNIQUE(business_id, external_message_id)`. Context y payload usan JSONB en
+PostgreSQL. InboundMessage queda preparado, sin procesamiento de webhooks todavía.
+
+```python
+from app.core.database import Session
+from app.services.conversation.engine import ConversationEngine
+
+async with Session() as session:
+    result = await ConversationEngine(session).handle_message(
+        business_id=1, phone="+523312345678", text="hola")
+    print(result.messages)
+```
+
+Cada llamada posee una transacción y requiere una sesión sin transacción activa.
+El engine no depende de HTTP ni de Meta. Puede recrearse entre mensajes porque
+el estado reside en PostgreSQL.
+
+- Flujo: menú → servicio → hoy/mañana/pasado mañana → horario → confirmación.
+- Los días se calculan en la zona del negocio; los horarios vienen de AvailabilityService.
+  La conversación descarta horarios pasados, también al confirmar.
+- El contexto conserva IDs, fechas y listas de inicios ISO para mantener la
+  correspondencia de las opciones numéricas mostradas; nunca objetos ORM completos.
+- Una entrada inválida conserva estado y contexto y repite las opciones.
+- `CANCELAR` limpia el flujo en cualquier estado; no cancela citas existentes.
+  Responder `2` en confirmación también descarta el flujo.
+- El catálogo vacío vuelve al menú; un día sin horarios permite elegir otro día.
+  Si alguien ocupa el horario antes de confirmar, el motor vuelve a ofrecer disponibilidad.
+- Una confirmación exitosa crea una cita real, limpia contexto y vuelve al menú.
+- El flujo no solicita nombre: para clientes nuevos se usa el teléfono como nombre
+  provisional. Si el cliente existe, se conserva su nombre.
+- Todas las transiciones toman el mismo bloqueo de Business que BookingService.
+  La confirmación utiliza `create_appointment_in_transaction`, que no confirma una
+  transacción propia. Cita, Customer y Conversation se guardan o revierten juntos.
+- Esto no implementa idempotencia de mensajes. Un texto repetido después de confirmar
+  se interpreta en el nuevo estado; el futuro gateway deberá deduplicar por message_id.
+
+Prueba del checkpoint contra PostgreSQL (esquemas temporales aislados):
+
+```powershell
+cd backend
+$env:TEST_DATABASE_URL = 'postgresql+asyncpg://booking:booking@localhost:5432/booking'
+.venv/Scripts/python.exe -m pytest tests/test_conversation_engine.py -q
+```
+
+Incluye el flujo completo con Appointment persistida, continuidad entre sesiones,
+inputs inválidos, zona horaria, aislamiento, horario ocupado, confirmaciones
+concurrentes y un fallo simulado después del INSERT para verificar rollback.
+Meta, webhooks y envío de WhatsApp corresponden al siguiente checkpoint.
