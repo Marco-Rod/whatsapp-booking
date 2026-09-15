@@ -18,14 +18,20 @@ class ConversationEngine:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     async def handle_message(self, business_id: int, phone: str, text: str) -> ConversationResult:
-        phone = CustomerInput(name=phone, phone=phone).phone
         async with self.session.begin():
-            business = await self.booking.bookings.lock_business(business_id)
-            if business is None:
-                raise NotFoundError("Business not found")
-            conversation = await self.repository.get_or_create(business_id, phone)
-            result = await self._handle(conversation, business, text.strip())
-            await self.session.flush()
+            return await self.handle_message_in_transaction(business_id, phone, text)
+
+    async def handle_message_in_transaction(self, business_id: int, phone: str, text: str) -> ConversationResult:
+        """Join the caller's transaction for atomic inbound-message processing."""
+        if not self.session.in_transaction():
+            raise RuntimeError("An active transaction is required")
+        phone = CustomerInput(name=phone, phone=phone).phone
+        business = await self.booking.bookings.lock_business(business_id)
+        if business is None:
+            raise NotFoundError("Business not found")
+        conversation = await self.repository.get_or_create(business_id, phone)
+        result = await self._handle(conversation, business, text.strip())
+        await self.session.flush()
         return result
 
     @staticmethod

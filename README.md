@@ -1,4 +1,4 @@
-# Booking Core — Día 3, checkpoint 1: Conversation Engine
+# Booking Core — Día 3, checkpoint 2: WhatsApp Gateway
 
 FastAPI + SQLAlchemy async + PostgreSQL + Alembic. Consulta disponibilidad de un
 servicio según el horario semanal y las citas pendientes o confirmadas.
@@ -59,7 +59,7 @@ Estas pruebas no sustituyen la verificación de migraciones en PostgreSQL.
 - Negocio, servicios y horarios se configuran mediante seed o base de datos.
 - El ciclo de Appointment se describe en las secciones del día dos.
 
-No se han implementado WhatsApp, Calendar ni dashboard.
+La conexión real con Meta, Calendar y dashboard siguen pendientes.
 
 ## Día 2: crear reservas
 
@@ -192,4 +192,69 @@ $env:TEST_DATABASE_URL = 'postgresql+asyncpg://booking:booking@localhost:5432/bo
 Incluye el flujo completo con Appointment persistida, continuidad entre sesiones,
 inputs inválidos, zona horaria, aislamiento, horario ocupado, confirmaciones
 concurrentes y un fallo simulado después del INSERT para verificar rollback.
-Meta, webhooks y envío de WhatsApp corresponden al siguiente checkpoint.
+La integración del siguiente checkpoint se describe a continuación.
+
+## Día 3, checkpoint 2: gateway probado sin Meta real
+
+Endpoints:
+
+- `GET /api/v1/webhooks/whatsapp`: verifica `hub.mode=subscribe` y
+  `hub.verify_token`; devuelve `hub.challenge` como texto (200), o 403 si no coincide.
+- `POST /api/v1/webhooks/whatsapp`: parsea todos los mensajes de texto del lote,
+  deduplica, llama al engine y envía sus respuestas mediante WhatsAppClient.
+  Devuelve 200 también para duplicados, estados de entrega y formatos no textuales
+  ignorados. Un texto mal formado devuelve 400.
+
+Las cuatro variables de `.env.example` se pasan al contenedor por Compose:
+`WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` y
+`WHATSAPP_API_VERSION`. Se dejan vacías; la versión Graph deberá elegirse en la
+configuración real de Meta. El cliente utiliza Bearer Auth y `POST /{version}/{phone_number_id}/messages`.
+
+El `phone_number_id` recibido debe coincidir con el configurado. El
+`metadata.display_phone_number` se normaliza a formato internacional y debe
+coincidir con exactamente un `Business.phone_number` (guardado como `+5233...`).
+Un número sin negocio configurado, o un mapeo ambiguo, devuelve 503. No se asume
+`business_id=1`. Los eventos de otros números de WhatsApp se ignoran.
+
+### Transacciones y reintentos
+
+1. Bajo el bloqueo de Business, se consulta/crea InboundMessage por la clave única
+   `(business_id, external_message_id)`.
+2. El engine participa en la transacción mediante `handle_message_in_transaction`.
+   InboundMessage, Conversation, Customer y Appointment se confirman juntos.
+3. `processed_at` indica que el procesamiento de negocio terminó. `payload`
+   conserva un mensaje normalizado, las respuestas y `sent_count`. No contiene
+   headers ni tokens de acceso; sí contiene teléfono/texto del cliente.
+4. Después del commit se envían las respuestas. Un bloqueo de InboundMessage
+   serializa entregas concurrentes del mismo mensaje, sin retener el bloqueo de
+   Business durante la llamada de red. Cada respuesta aceptada actualiza el contador.
+5. Si el envío falla, POST devuelve 503. El retry envía solo las respuestas pendientes,
+   sin reprocesar el mensaje ni recrear la cita. Si todo fue entregado, devuelve 200
+   sin volver a llamar al engine ni al cliente.
+
+No se añade infraestructura de colas: las respuestas pendientes se guardan en el
+JSONB existente. Un fallo de proceso después de que Meta acepte un envío pero antes
+de confirmar el contador puede repetir ese texto en un retry; la operación de negocio
+permanece deduplicada. La entrega de texto exactamente una vez no está garantizada.
+
+### Verificación del checkpoint
+
+```powershell
+cd backend
+.venv/Scripts/python.exe -m pytest tests/test_whatsapp.py -q
+$env:TEST_DATABASE_URL = 'postgresql+asyncpg://booking:booking@localhost:5432/booking'
+.venv/Scripts/python.exe -m pytest tests/test_whatsapp.py -q
+```
+
+El cliente está mockeado en las pruebas HTTP. La prueba del adaptador Graph utiliza
+`httpx.MockTransport`; no se envían mensajes reales. Se verifican el handshake,
+parseo de lotes, números, ignorados, duplicados, confirmación repetida/concurrente,
+rollback completo, fallos de envío y recuperación parcial.
+
+Referencias de contrato: [payloads oficiales de Meta](https://www.postman.com/meta/whatsapp-business-platform/folder/tduohwq/webhook-payload-reference)
+y [API de mensajes](https://www.postman.com/meta/whatsapp-business-platform/folder/o48mro7/messages).
+
+Este checkpoint permanece local, como los anteriores. Antes de publicar el webhook
+en el checkpoint 3 faltan configurar Meta, autenticar POST con la firma de Meta y
+App Secret, y probar recepción/envío desde un teléfono. El verify token del GET
+no autentica el POST. No se ha configurado una URL pública ni realizado envíos reales.
