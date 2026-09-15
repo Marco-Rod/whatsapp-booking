@@ -17,9 +17,12 @@ class AvailabilityRepository:
         return await self.session.scalar(select(BusinessHours).where(
             BusinessHours.business_id == business_id, BusinessHours.weekday == weekday))
 
-    async def busy(self, business_id, start, end):
-        result = await self.session.scalars(select(Appointment).where(
+    async def busy(self, business_id, start, end, exclude_appointment_id=None):
+        query = select(Appointment).where(
             Appointment.business_id == business_id,
             Appointment.status.in_(["PENDING", "CONFIRMED"]),
-            Appointment.starts_at < end, Appointment.ends_at > start))
+            Appointment.starts_at < end, Appointment.ends_at > start)
+        if exclude_appointment_id is not None:
+            query = query.where(Appointment.id != exclude_appointment_id)
+        result = await self.session.scalars(query)
         return [(a.starts_at, a.ends_at) for a in result]

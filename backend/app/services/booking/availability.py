@@ -28,7 +28,8 @@ class AvailabilityService:
         self.repository = repository
         self.interval_minutes = interval_minutes
 
-    async def get_available_slots(self, business_id: int, service_id: int, target_date: date):
+    async def get_available_slots(self, business_id: int, service_id: int, target_date: date,
+                                  exclude_appointment_id: int | None = None):
         business = await self.repository.business(business_id)
         if business is None:
             raise NotFoundError("Business not found")
@@ -43,6 +44,6 @@ class AvailabilityService:
         zone = ZoneInfo(business.timezone)
         opening = datetime.combine(target_date, hours.start_time, zone)
         closing = datetime.combine(target_date, hours.end_time, zone)
-        busy = await self.repository.busy(business_id, opening.astimezone(timezone.utc), closing.astimezone(timezone.utc))
+        busy = await self.repository.busy(business_id, opening.astimezone(timezone.utc), closing.astimezone(timezone.utc), exclude_appointment_id)
         response.slots = generate_slots(opening, closing, service.duration_minutes, self.interval_minutes, busy)
         return response

@@ -24,11 +24,16 @@ class CustomerResponse(BaseModel):
     phone: str
 
 
+class AppointmentReschedule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    starts_at: AwareDatetime
+
+
 class AppointmentResponse(BaseModel):
     id: int
     business_id: int
     service_id: int
-    customer: CustomerResponse
+    customer: CustomerResponse | None
     starts_at: datetime
     ends_at: datetime
     status: Literal["pending", "confirmed", "cancelled", "completed"]

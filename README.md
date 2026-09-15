@@ -1,4 +1,4 @@
-# Booking Core — Día 2, checkpoint 1
+# Booking Core — Día 2, ciclo de reservas
 
 FastAPI + SQLAlchemy async + PostgreSQL + Alembic. Consulta disponibilidad de un
 servicio según el horario semanal y las citas pendientes o confirmadas.
@@ -57,8 +57,7 @@ Estas pruebas no sustituyen la verificación de migraciones en PostgreSQL.
 - Servicio inexistente, inactivo o de otro negocio: 404. Parámetros inválidos: 422.
 - Disponibilidad por fecha solicitada; todavía no se filtran horas pasadas.
 - Negocio, servicios y horarios se configuran mediante seed o base de datos.
-- Appointment es únicamente el soporte de intervalos; crear, cancelar,
-  reprogramar y proteger contra reservas simultáneas corresponden al día dos.
+- El ciclo de Appointment se describe en las secciones del día dos.
 
 No se han implementado WhatsApp, Calendar ni dashboard.
 
@@ -106,6 +105,39 @@ $env:TEST_DATABASE_URL = 'postgresql+asyncpg://booking:booking@localhost:5432/bo
 
 La prueba concurrente envía dos solicitudes al mismo horario y comprueba 201/409
 y una sola cita persistida. Sin `TEST_DATABASE_URL`, se omite explícitamente.
-Cancelación y reprogramación corresponden al siguiente checkpoint.
 Concurrencia de reservas (día dos) e idempotencia de webhooks (día tres) son
 garantías distintas; todavía no existe idempotencia para reintentos de creación.
+
+## Día 2: consultar, cancelar y reprogramar
+
+| Endpoint | Resultado |
+| --- | --- |
+| `GET /api/v1/appointments/{id}` | 200 con la cita, cliente e intervalo en zona local |
+| `POST /api/v1/appointments/{id}/cancel` | 200, estado `cancelled`; repetir devuelve 200 |
+| `POST /api/v1/appointments/{id}/reschedule` | 200 con el nuevo intervalo y el mismo ID |
+
+Una cita inexistente devuelve 404 en las tres operaciones. La reprogramación
+acepta solamente `{"starts_at": "2026-09-19T15:30:00-06:00"}` y recalcula el fin
+con la duración actual del servicio. Cancelación no requiere cuerpo.
+
+| Estado actual | Cancelar | Reprogramar |
+| --- | --- | --- |
+| CONFIRMED | CANCELLED | CONFIRMED |
+| CANCELLED | CANCELLED (idempotente) | 409 |
+| COMPLETED | 409 | 409 |
+| PENDING | 409 | 409 |
+
+Ambas escrituras adquieren el mismo bloqueo de Business usado por CREATE y leen
+el estado mutable de la cita después de adquirirlo. Reprogramar excluye únicamente
+su propia cita del cálculo interno de disponibilidad; esa exclusión no se expone
+en la consulta pública. El mismo horario, o un intervalo que se solape solo con
+la propia cita, es válido si cumple las reglas actuales del servicio y negocio.
+
+Un conflicto o validación fallida revierte toda la operación y conserva el
+intervalo original. Cancelar libera el horario y reprogramar libera el anterior
+y ocupa el nuevo. Las citas antiguas sin Customer se devuelven con `customer: null`.
+No se requiere una migración adicional para este checkpoint.
+
+Las pruebas PostgreSQL cubren también reprogramaciones simultáneas al mismo slot,
+CREATE contra RESCHEDULE, CANCEL contra RESCHEDULE y conservación de ambas citas
+cuando una intenta moverse al horario de otra.

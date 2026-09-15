@@ -144,3 +144,147 @@ async def test_concurrent_requests_postgresql(booking_client):
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Appointment)) == 1
         assert await session.scalar(select(func.count()).select_from(Customer)) == 1
+
+
+async def available_starts(client):
+    response = await client.get("/api/v1/availability", params={
+        "business_id": 1, "service_id": 1, "date": "2026-09-19"})
+    assert response.status_code == 200
+    return [slot["starts_at"] for slot in response.json()["slots"]]
+
+
+async def move(client, appointment_id, start="2026-09-19T15:30:00-06:00"):
+    return await client.post(f"/api/v1/appointments/{appointment_id}/reschedule", json={"starts_at": start})
+
+
+async def test_get_and_idempotent_cancel_frees_slot(booking_client):
+    client, sessions, _ = booking_client
+    original = (await create(client)).json()
+    path = f'/api/v1/appointments/{original["id"]}'
+    assert (await client.get(path)).json() == original
+    assert original["starts_at"] not in await available_starts(client)
+    first = await client.post(path + "/cancel")
+    second = await client.post(path + "/cancel")
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert second.json()["status"] == "cancelled"
+    assert original["starts_at"] in await available_starts(client)
+    async with sessions() as session:
+        assert (await session.get(Appointment, original["id"])).status == "CANCELLED"
+        assert await session.scalar(select(func.count()).select_from(Appointment)) == 1
+
+
+async def test_reschedule_moves_interval_and_reuses_identity(booking_client):
+    client, _, _ = booking_client
+    original = (await create(client)).json()
+    response = await move(client, original["id"])
+    assert response.status_code == 200
+    moved = response.json()
+    assert moved["id"] == original["id"]
+    assert moved["customer"] == original["customer"]
+    assert moved["status"] == "confirmed"
+    assert moved["ends_at"] == "2026-09-19T16:30:00-06:00"
+    slots = await available_starts(client)
+    assert original["starts_at"] in slots
+    assert moved["starts_at"] not in slots
+    assert (await client.get(f'/api/v1/appointments/{original["id"]}')).json() == moved
+
+
+@pytest.mark.parametrize("start", ["2026-09-19T11:30:00-06:00", "2026-09-19T12:00:00-06:00"])
+async def test_reschedule_excludes_self(booking_client, start):
+    client, _, _ = booking_client
+    original = (await create(client)).json()
+    response = await move(client, original["id"], start)
+    assert response.status_code == 200
+    assert response.json()["starts_at"] == start
+
+
+async def test_failed_reschedule_preserves_both_appointments(booking_client):
+    client, _, _ = booking_client
+    first = (await create(client)).json()
+    second = (await create(client, starts_at="2026-09-19T15:30:00-06:00")).json()
+    response = await move(client, first["id"])
+    assert response.status_code == 409
+    for original in (first, second):
+        assert (await client.get(f'/api/v1/appointments/{original["id"]}')).json() == original
+
+
+@pytest.mark.parametrize("state,operation", [("CANCELLED","reschedule"),("COMPLETED","cancel"),
+    ("COMPLETED","reschedule"),("PENDING","cancel"),("PENDING","reschedule")])
+async def test_invalid_lifecycle_transition(booking_client, state, operation):
+    client, sessions, _ = booking_client
+    original = (await create(client)).json()
+    async with sessions.begin() as session:
+        appointment = await session.get(Appointment, original["id"])
+        appointment.status = state
+    if operation == "cancel":
+        response = await client.post(f'/api/v1/appointments/{original["id"]}/cancel')
+    else:
+        response = await move(client, original["id"])
+    assert response.status_code == 409
+    current = (await client.get(f'/api/v1/appointments/{original["id"]}')).json()
+    assert current["status"] == state.lower()
+    assert current["starts_at"] == original["starts_at"]
+
+
+@pytest.mark.parametrize("operation", ["get", "cancel", "reschedule"])
+async def test_missing_appointment(booking_client, operation):
+    client, _, _ = booking_client
+    if operation == "get":
+        response = await client.get("/api/v1/appointments/999")
+    elif operation == "cancel":
+        response = await client.post("/api/v1/appointments/999/cancel")
+    else:
+        response = await move(client, 999)
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("start,status", [("2026-09-20T15:30:00-06:00",409),
+    ("2026-09-19T17:30:00-06:00",409),("2026-09-19T15:15:00-06:00",409),
+    ("2026-09-19T15:30:00",422)])
+async def test_invalid_reschedule_keeps_original(booking_client, start, status):
+    client, _, _ = booking_client
+    original = (await create(client)).json()
+    assert (await move(client, original["id"], start)).status_code == status
+    assert (await client.get(f'/api/v1/appointments/{original["id"]}')).json() == original
+
+
+async def test_concurrent_reschedules_postgresql(booking_client):
+    client, sessions, postgres = booking_client
+    if not postgres:
+        pytest.skip("Requires real PostgreSQL")
+    first = (await create(client)).json()
+    second = (await create(client, starts_at="2026-09-19T09:00:00-06:00")).json()
+    responses = await asyncio.wait_for(asyncio.gather(
+        move(client, first["id"]), move(client, second["id"])), timeout=20)
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    async with sessions() as session:
+        appointments = list(await session.scalars(select(Appointment)))
+        assert len(appointments) == 2
+        assert sum(a.starts_at.hour == 21 and a.starts_at.minute == 30 for a in appointments) == 1
+    for original, response in zip((first, second), responses):
+        if response.status_code == 409:
+            assert (await client.get(f'/api/v1/appointments/{original["id"]}')).json() == original
+
+
+async def test_concurrent_create_and_reschedule_postgresql(booking_client):
+    client, _, postgres = booking_client
+    if not postgres:
+        pytest.skip("Requires real PostgreSQL")
+    original = (await create(client)).json()
+    moved, created = await asyncio.wait_for(asyncio.gather(
+        move(client, original["id"]), create(client, starts_at="2026-09-19T15:30:00-06:00")), timeout=20)
+    assert (moved.status_code, created.status_code) in [(200,409),(409,201)]
+
+
+async def test_concurrent_cancel_and_reschedule_postgresql(booking_client):
+    client, _, postgres = booking_client
+    if not postgres:
+        pytest.skip("Requires real PostgreSQL")
+    original = (await create(client)).json()
+    path = f'/api/v1/appointments/{original["id"]}'
+    cancelled, moved = await asyncio.wait_for(asyncio.gather(client.post(path + "/cancel"),
+        move(client, original["id"])), timeout=20)
+    assert cancelled.status_code == 200
+    assert moved.status_code in (200,409)
+    assert (await client.get(path)).json()["status"] == "cancelled"

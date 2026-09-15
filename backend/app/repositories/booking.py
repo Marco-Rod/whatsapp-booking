@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models import Appointment, Business, Service
 
 
@@ -20,3 +21,10 @@ class BookingRepository:
         self.session.add(appointment)
         await self.session.flush()
         return appointment
+
+    async def appointment_business_id(self, appointment_id: int) -> int | None:
+        return await self.session.scalar(select(Appointment.business_id).where(Appointment.id == appointment_id))
+
+    async def appointment(self, appointment_id: int) -> Appointment | None:
+        return await self.session.scalar(select(Appointment).where(Appointment.id == appointment_id)
+            .options(selectinload(Appointment.customer)).execution_options(populate_existing=True))
