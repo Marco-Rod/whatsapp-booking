@@ -138,4 +138,5 @@ class ConversationEngine:
                 await self._times(conversation, business, context["date"])])
         self._reset(conversation)
         return ConversationResult([f"✅ Tu cita está confirmada.\n{service.name}\n"
-            f"{appointment.starts_at:%Y-%m-%d %H:%M}\n¡Nos vemos pronto!", messages.MAIN_MENU])
+            f"{appointment.starts_at:%Y-%m-%d %H:%M}\n¡Nos vemos pronto!", messages.MAIN_MENU],
+            appointment_id=appointment.id)

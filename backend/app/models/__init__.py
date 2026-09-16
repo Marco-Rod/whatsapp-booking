@@ -20,6 +20,7 @@ class Business(Timestamps, Base):
     name: Mapped[str] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(100), default="America/Mexico_City")
     phone_number: Mapped[str | None] = mapped_column(String(30))
+    calendar_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     customers: Mapped[list["Customer"]] = relationship(back_populates="business")
 
 
@@ -72,7 +73,7 @@ class Appointment(Timestamps, Base):
     starts_at: Mapped[datetime] = mapped_column(UTCDateTime())
     ends_at: Mapped[datetime] = mapped_column(UTCDateTime())
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
-    calendar_event_id: Mapped[str | None] = mapped_column(String(255))
+    calendar_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Day-one intervals have no customer; all new bookings require one in the service.
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     customer: Mapped[Customer | None] = relationship(back_populates="appointments")

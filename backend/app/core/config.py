@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_api_version: str = ""
     meta_app_secret: SecretStr = SecretStr("")
+    google_calendar_token_file: str = "../token.json"
 
 
 settings = Settings()

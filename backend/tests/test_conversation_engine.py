@@ -44,6 +44,7 @@ async def test_full_conversation_creates_real_appointment(booking_client):
     assert current.context == {}
     async with sessions() as session:
         appointment = await session.scalar(select(Appointment))
+        assert result.appointment_id == appointment.id
         customer = await session.get(Customer, appointment.customer_id)
         assert customer.phone == PHONE
         assert appointment.service_id == 1
@@ -62,6 +63,7 @@ async def test_invalid_input_and_universal_cancel(booking_client, steps, state):
     before = await conversation(sessions)
     result = await handle(sessions, "999999999999999999999999999999999999")
     after = await conversation(sessions)
+    assert result.appointment_id is None
     assert after.state == state
     assert after.context == before.context
     if state != "main_menu":

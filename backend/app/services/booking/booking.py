@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,12 @@ from app.services.booking.availability import AvailabilityService, NotFoundError
 
 class BookingConflictError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class CancellationResult:
+    appointment: AppointmentResponse
+    was_cancelled_now: bool
 
 
 class BookingService:
@@ -88,15 +95,21 @@ class BookingService:
             return self._response(appointment, business)
 
     async def cancel_appointment(self, appointment_id: int) -> AppointmentResponse:
+        result = await self.cancel_appointment_with_result(appointment_id)
+        return result.appointment
+
+    async def cancel_appointment_with_result(self, appointment_id: int) -> CancellationResult:
+        """Report the transition under the business lock, returning only after commit."""
         async with self.session.begin():
             appointment, business = await self._locked_appointment(appointment_id)
             if appointment.status not in ("CONFIRMED", "CANCELLED"):
                 raise BookingConflictError("Only confirmed appointments can be cancelled")
-            if appointment.status != "CANCELLED":
+            was_cancelled_now = appointment.status == "CONFIRMED"
+            if was_cancelled_now:
                 appointment.status = "CANCELLED"
                 await self.session.flush()
             response = self._response(appointment, business)
-        return response
+        return CancellationResult(response, was_cancelled_now)
 
     async def reschedule_appointment(self, appointment_id: int,
                                      request: AppointmentReschedule) -> AppointmentResponse:
