@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
@@ -11,6 +12,7 @@ from app.integrations.whatsapp.signature import verify_webhook_signature
 from app.services.whatsapp.webhook import WebhookService, verify_webhook
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def get_whatsapp_settings():
@@ -53,8 +55,12 @@ async def receive(request: Request, service=Depends(get_webhook_service),
         await service.process(payload)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid WhatsApp payload") from None
-    except WhatsAppConfigurationError:
-        raise HTTPException(status_code=503, detail="WhatsApp is not configured") from None
+    except WhatsAppConfigurationError as exc:
+        logger.warning("WhatsApp configuration error: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp is not configured",
+        ) from None
     except WhatsAppSendError:
         raise HTTPException(status_code=503, detail="Response delivery pending; retry required") from None
     return {"status": "ok"}

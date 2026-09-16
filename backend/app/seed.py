@@ -10,7 +10,7 @@ async def main():
     async with Session.begin() as session:
         business = await session.scalar(select(Business).where(Business.name == "Bella Studio"))
         if business is None:
-            business = Business(name="Bella Studio", timezone="America/Mexico_City")
+            business = Business(name="Bella Studio", phone_number="+15551905529", timezone="America/Mexico_City")
             session.add(business)
             await session.flush()
             service = Service(business_id=business.id, name="Corte", duration_minutes=60)

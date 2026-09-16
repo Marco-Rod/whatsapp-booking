@@ -1,5 +1,8 @@
+import logging
 import re
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class WhatsAppConfigurationError(Exception):
@@ -33,6 +36,19 @@ class WhatsAppClient:
                 body = response.json()
                 if not body.get("messages") or not body["messages"][0].get("id"):
                     raise ValueError("Missing message acknowledgement")
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "WhatsApp Graph API returned HTTP %s",
+                exc.response.status_code,
+            )
+            raise WhatsAppSendError(
+                "WhatsApp could not acknowledge the response"
+            ) from None
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            # Never expose provider bodies, request headers, tokens, or customer text.
-            raise WhatsAppSendError("WhatsApp could not acknowledge the response") from None
+            logger.warning(
+                "WhatsApp send failed: %s",
+                type(exc).__name__,
+            )
+            raise WhatsAppSendError(
+                "WhatsApp could not acknowledge the response"
+            ) from None

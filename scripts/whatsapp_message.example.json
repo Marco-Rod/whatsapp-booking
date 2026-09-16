@@ -1,0 +1,29 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "100000000000001",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15555550100",
+              "phone_number_id": "100000000000002"
+            },
+            "messages": [
+              {
+                "from": "15555550101",
+                "id": "wamid.EXAMPLE-DAY3-001",
+                "timestamp": "1700000000",
+                "text": {"body": "Hola"},
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
