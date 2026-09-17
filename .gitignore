@@ -6,3 +6,8 @@ __pycache__/
 scripts/whatsapp_message.json
 secrets/
 token.json
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo

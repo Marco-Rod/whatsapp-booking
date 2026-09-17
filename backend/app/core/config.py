@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     whatsapp_api_version: str = ""
     meta_app_secret: SecretStr = SecretStr("")
     google_calendar_token_file: str = "../token.json"
+    cors_allowed_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 settings = Settings()

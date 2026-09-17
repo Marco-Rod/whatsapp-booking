@@ -37,9 +37,18 @@ class WhatsAppClient:
                 if not body.get("messages") or not body["messages"][0].get("id"):
                     raise ValueError("Missing message acknowledgement")
         except httpx.HTTPStatusError as exc:
+            error_code = None
+            try:
+                error_body = exc.response.json()
+                error = error_body.get("error") if isinstance(error_body, dict) else None
+                candidate = error.get("code") if isinstance(error, dict) else None
+                if isinstance(candidate, int):
+                    error_code = candidate
+            except ValueError:
+                pass
             logger.warning(
-                "WhatsApp Graph API returned HTTP %s",
-                exc.response.status_code,
+                "WhatsApp Graph API returned HTTP %s (code=%s)",
+                exc.response.status_code, error_code,
             )
             raise WhatsAppSendError(
                 "WhatsApp could not acknowledge the response"

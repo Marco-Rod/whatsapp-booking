@@ -79,6 +79,18 @@ class Appointment(Timestamps, Base):
     customer: Mapped[Customer | None] = relationship(back_populates="appointments")
 
 
+class AppointmentReminder(Timestamps, Base):
+    __tablename__ = "appointment_reminders"
+    __table_args__ = (
+        UniqueConstraint("appointment_id", "scheduled_for", name="uq_appointment_reminder_schedule"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    appointment_id: Mapped[int] = mapped_column(ForeignKey("appointments.id"), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
 class Conversation(Timestamps, Base):
     __tablename__ = "conversations"
     __table_args__ = (
