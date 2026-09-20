@@ -19,6 +19,8 @@ class WhatsAppClient:
         self.transport = transport
 
     async def send_text(self, phone: str, text: str) -> None:
+        if phone.startswith("demo:"):
+            raise WhatsAppSendError("Fictional demo contacts cannot receive messages")
         token = self.config.whatsapp_access_token.get_secret_value()
         number_id = self.config.whatsapp_phone_number_id
         version = self.config.whatsapp_api_version

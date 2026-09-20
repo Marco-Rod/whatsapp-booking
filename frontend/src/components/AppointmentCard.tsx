@@ -6,7 +6,7 @@ export function AppointmentCard({ appointment: a, timezone }: { appointment: Das
   const cancelled = a.status === 'CANCELLED'
   return <li className={`appointment ${cancelled ? 'is-cancelled' : ''}`} data-testid="appointment">
     <div className="appointment-time"><strong><time dateTime={a.starts_at}>{format(a.starts_at)}</time></strong><span>— {format(a.ends_at)}</span></div>
-    <div className="appointment-service"><span className="mobile-label">Servicio</span><strong>{a.service.name}</strong><span className="appointment-id">Cita #{a.id}</span></div>
+    <div className="appointment-service"><span className="mobile-label">Servicio</span><strong>{a.service.name}</strong></div>
     <div className="appointment-customer"><span className="avatar" aria-hidden="true">{(a.customer?.name || 'Cliente').slice(0, 1).toUpperCase()}</span><span>{a.customer?.name || 'Sin nombre'}</span></div>
     <div className="appointment-status"><span className={`badge ${cancelled ? 'cancelled' : 'confirmed'}`}><span className="status-dot"/>{cancelled ? 'Cancelada' : 'Confirmada'}</span></div>
     <div className="appointment-integrations">

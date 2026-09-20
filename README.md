@@ -1,5 +1,18 @@
 # Booking Core — Día 3, checkpoint 2.5: firma del webhook
 
+## Día 6, checkpoint 1: preparar la demo
+
+Guion, prerrequisitos y datos ficticios de Bella Studio en [demo/DEMO.md](demo/DEMO.md).
+Con dependencias y migraciones instaladas, desde la raíz:
+
+```powershell
+python scripts/seed_demo.py --date today
+python scripts/seed_demo.py --date 2026-09-18
+```
+
+Usa el Python del backend. El seed es idempotente por fecha, conserva los datos
+existentes y no envía mensajes ni crea eventos de Calendar.
+
 FastAPI + SQLAlchemy async + PostgreSQL + Alembic. Consulta disponibilidad de un
 servicio según el horario semanal y las citas pendientes o confirmadas.
 

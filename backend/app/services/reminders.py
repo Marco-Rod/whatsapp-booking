@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Appointment, AppointmentReminder
+from app.models import Appointment, AppointmentReminder, Customer
 
 
 class ReminderService:
@@ -32,6 +32,9 @@ class ReminderService:
             query = select(Appointment).where(
                 Appointment.status == "CONFIRMED", Appointment.starts_at > now,
                 Appointment.starts_at <= now + timedelta(hours=24),
+                # Demo identities are fixtures, never reminder recipients.
+                ~select(Customer.id).where(Customer.id == Appointment.customer_id,
+                                           Customer.phone.like("demo:%")).exists(),
             )
             if appointment_id is not None:
                 query = query.where(Appointment.id == appointment_id)
