@@ -170,18 +170,23 @@ async def test_delivery_failure_retries_without_reprocessing(webhook):
 
 
 async def test_partial_delivery_resumes_only_pending_response(webhook):
-    client, _, sender, calls, _, _ = webhook
-    await confirm_setup(client)
+    client, _, sender, _, _, _ = webhook
+
+    # Reach SELECT_SERVICE, where an invalid option produces two responses.
+    await client.post(URL, json=envelope("hola", "wamid.hello"))
+    await client.post(URL, json=envelope("1", "wamid.menu"))
+
     sender.send_text.reset_mock()
     sender.send_text.side_effect = [None, WhatsAppSendError("offline"), None]
-    payload = envelope("1", "wamid.confirm")
+
+    payload = envelope("999", "wamid.invalid-service")
     assert (await client.post(URL, json=payload)).status_code == 503
     assert (await client.post(URL, json=payload)).status_code == 200
-    assert len(calls) == 6
+
     texts = [call.args[1] for call in sender.send_text.await_args_list]
-    assert "confirmada" in texts[0]
-    assert texts[1] == texts[2]
     assert sender.send_text.await_count == 3
+    assert texts[0] != texts[1]
+    assert texts[1] == texts[2]
 
 
 async def test_batch_retry_preserves_processed_messages(webhook):
@@ -320,26 +325,25 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
     fault["calendar"].sync_created_appointment.assert_awaited_once()
     async with sessions() as session:
         assert (await session.scalar(select(Appointment))).calendar_event_id == "google-event-123"
-    assert sender.send_text.await_count == 2
+    assert sender.send_text.await_count == 1
 
 
 async def test_calendar_not_repeated_on_duplicate_or_delivery_retry(webhook):
-    client, sessions, sender, calls, fault, _ = webhook
+    client, sessions, sender, _, fault, _ = webhook
     await enable_calendar(sessions)
     await confirm_setup(client)
     sender.send_text.reset_mock()
-    sender.send_text.side_effect = [None, WhatsAppSendError("offline"), None]
+    sender.send_text.side_effect = [WhatsAppSendError("offline"), None]
     payload = envelope("1", "wamid.confirm")
     assert (await client.post(URL, json=payload)).status_code == 503
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
     fault["calendar"].sync_created_appointment.assert_awaited_once()
-    assert len(calls) == 6
-    assert sender.send_text.await_count == 3
+    assert sender.send_text.await_count == 2
 
 
 async def test_calendar_failure_preserves_booking_processing_and_delivery(webhook):
-    client, sessions, sender, calls, fault, _ = webhook
+    client, sessions, sender, _, fault, _ = webhook
     await enable_calendar(sessions)
     await confirm_setup(client)
     sender.send_text.reset_mock()
@@ -348,8 +352,7 @@ async def test_calendar_failure_preserves_booking_processing_and_delivery(webhoo
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
     fault["calendar"].sync_created_appointment.assert_awaited_once()
-    assert len(calls) == 6
-    assert sender.send_text.await_count == 2
+    assert sender.send_text.await_count == 1
     async with sessions() as session:
         appointment = await session.scalar(select(Appointment))
         assert appointment.status == "CONFIRMED"

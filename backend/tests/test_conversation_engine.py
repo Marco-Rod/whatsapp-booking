@@ -38,7 +38,10 @@ async def test_full_conversation_creates_real_appointment(booking_client):
     await to_confirmation(sessions)
     selected = (await conversation(sessions)).context["starts_at"]
     result = await handle(sessions, "1")
+
+    assert len(result.messages) == 1
     assert "Tu cita está confirmada" in result.messages[0]
+
     current = await conversation(sessions)
     assert current.state == "main_menu"
     assert current.context == {}
