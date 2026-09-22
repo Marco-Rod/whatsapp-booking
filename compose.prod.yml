@@ -44,7 +44,7 @@ services:
 
       GOOGLE_CALENDAR_TOKEN_FILE: ${GOOGLE_CALENDAR_TOKEN_FILE}
 
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
 
     volumes:
       - ./secrets/google-calendar-token.json:/run/secrets/google-calendar-token.json:ro
