@@ -13,6 +13,18 @@ class WhatsAppSendError(Exception):
     pass
 
 
+def _to_meta_recipient(phone: str) -> str:
+    """Convert our canonical phone representation to Meta's outbound recipient."""
+    digits = phone.lstrip("+")
+
+    # WhatsApp webhooks may represent Mexican mobile numbers as 521XXXXXXXXXX,
+    # while Meta's test recipient allow-list expects 52XXXXXXXXXX.
+    if digits.startswith("521") and len(digits) == 13:
+        return "52" + digits[3:]
+
+    return digits
+
+
 class WhatsAppClient:
     def __init__(self, config, transport=None):
         self.config = config
@@ -32,7 +44,7 @@ class WhatsAppClient:
             async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
                 response = await client.post(f"https://graph.facebook.com/{version}/{number_id}/messages",
                     headers={"Authorization": f"Bearer {token}"},
-                    json={"messaging_product": "whatsapp", "to": phone.lstrip("+"),
+                    json={"messaging_product": "whatsapp", "to": _to_meta_recipient(phone),
                           "type": "text", "text": {"body": text}})
                 response.raise_for_status()
                 body = response.json()

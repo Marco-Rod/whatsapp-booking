@@ -237,18 +237,49 @@ async def test_concurrent_confirmation_retry_postgresql(webhook):
         assert await session.scalar(select(func.count()).select_from(InboundMessage)) == 6
 
 
-async def test_graph_client_contract():
+@pytest.mark.parametrize(
+    ("phone", "expected_recipient"),
+    [
+        ("+523312345678", "523312345678"),
+        ("+5215512345678", "525512345678"),
+        ("+15555550199", "15555550199"),
+    ],
+)
+async def test_graph_client_contract(phone, expected_recipient):
     requests = []
+
     def respond(request):
         requests.append(request)
-        return httpx.Response(200, json={"messages":[{"id":"wamid.reply"}]})
-    config = Settings(_env_file=None, whatsapp_access_token="test-token",
-                      whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0")
-    await WhatsAppClient(config, httpx.MockTransport(respond)).send_text("+523312345678", "Hola")
-    assert str(requests[0].url) == "https://graph.facebook.com/v99.0/123456/messages"
+        return httpx.Response(
+            200,
+            json={"messages": [{"id": "wamid.reply"}]},
+        )
+
+    config = Settings(
+        _env_file=None,
+        whatsapp_access_token="test-token",
+        whatsapp_phone_number_id="123456",
+        whatsapp_api_version="v99.0",
+    )
+
+    await WhatsAppClient(
+        config,
+        httpx.MockTransport(respond),
+    ).send_text(phone, "Hola")
+
+    assert str(requests[0].url) == (
+        "https://graph.facebook.com/v99.0/123456/messages"
+    )
     assert requests[0].headers["authorization"] == "Bearer test-token"
+
     import json
-    assert json.loads(requests[0].content) == {"messaging_product":"whatsapp","to":"523312345678", "type":"text","text":{"body":"Hola"}}
+
+    assert json.loads(requests[0].content) == {
+        "messaging_product": "whatsapp",
+        "to": expected_recipient,
+        "type": "text",
+        "text": {"body": "Hola"},
+    }
 
 
 async def test_graph_client_sanitizes_provider_error():

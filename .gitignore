@@ -12,3 +12,6 @@ frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
 *.tsbuildinfo
+
+# Private SSH keys
+*.pem
