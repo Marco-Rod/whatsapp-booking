@@ -22,18 +22,25 @@ def booking_data():
     }
 
 
-async def test_sync_created_appointment_disabled_calendar(booking_data):
+async def test_sync_created_appointment_uses_explicit_calendar_id(booking_data):
     booking_data["business"].calendar_id = None
     client = FakeGoogleCalendarClient()
-    result = await CalendarService(client).sync_created_appointment(**booking_data)
-    assert result is None
-    assert client.created == client.updated == client.deleted == []
+    result = await CalendarService(client).sync_created_appointment(
+        **booking_data,
+        calendar_id="resolved-calendar",
+    )
+    assert result == "google-event-123"
+    assert client.created[0]["calendar_id"] == "resolved-calendar"
+    assert client.updated == client.deleted == []
     assert booking_data["appointment"].calendar_event_id is None
 
 
 async def test_sync_created_appointment_returns_event_id(booking_data):
     client = FakeGoogleCalendarClient()
-    result = await CalendarService(client).sync_created_appointment(**booking_data)
+    result = await CalendarService(client).sync_created_appointment(
+        **booking_data,
+        calendar_id="primary",
+    )
     assert result == "google-event-123"
     assert client.created == [{
         "calendar_id": "primary",
@@ -61,7 +68,10 @@ async def test_sync_created_appointment_failure_preserves_appointment(booking_da
               for column in Appointment.__table__.columns}
     client = FailingClient()
     with pytest.raises(GoogleCalendarError) as caught:
-        await CalendarService(client).sync_created_appointment(**booking_data)
+        await CalendarService(client).sync_created_appointment(
+            **booking_data,
+            calendar_id="primary",
+        )
     assert caught.value is error
     assert len(client.created) == 1
     assert client.updated == client.deleted == []
@@ -95,23 +105,38 @@ class FakeGoogleCalendarClient:
         self.deleted.append(kwargs)
 
 
-@pytest.mark.parametrize("missing", ["calendar", "event"])
-async def test_reschedule_skips_missing_calendar_or_event(booking_data, missing):
-    booking_data["appointment"].calendar_event_id = "existing-event"
-    if missing == "calendar":
-        booking_data["business"].calendar_id = None
-    else:
-        booking_data["appointment"].calendar_event_id = None
+async def test_reschedule_skips_missing_event(booking_data):
+    booking_data["appointment"].calendar_event_id = None
     client = FakeGoogleCalendarClient()
-    await CalendarService(client).sync_rescheduled_appointment(**booking_data)
+    await CalendarService(client).sync_rescheduled_appointment(
+        **booking_data,
+        calendar_id="primary",
+    )
     assert client.created == client.updated == client.deleted == []
+
+
+async def test_reschedule_uses_explicit_calendar_without_legacy_id(booking_data):
+    booking_data["business"].calendar_id = None
+    booking_data["appointment"].calendar_event_id = "existing-event"
+    client = FakeGoogleCalendarClient()
+
+    await CalendarService(client).sync_rescheduled_appointment(
+        **booking_data,
+        calendar_id="resolved-calendar",
+    )
+
+    assert client.updated[0]["calendar_id"] == "resolved-calendar"
+    assert client.updated[0]["event_id"] == "existing-event"
 
 
 async def test_reschedule_updates_same_event_once_without_create(booking_data):
     appointment = booking_data["appointment"]
     appointment.calendar_event_id = "existing-event"
     client = FakeGoogleCalendarClient()
-    await CalendarService(client).sync_rescheduled_appointment(**booking_data)
+    await CalendarService(client).sync_rescheduled_appointment(
+        **booking_data,
+        calendar_id="primary",
+    )
     assert client.updated == [{"calendar_id": "primary", "event_id": "existing-event",
                                "event": CalendarEventData.from_appointment(**booking_data).to_payload()}]
     assert client.created == client.deleted == []
@@ -130,24 +155,47 @@ async def test_reschedule_failure_keeps_dates_and_event_id(booking_data):
 
     client = FailingUpdate()
     with pytest.raises(GoogleCalendarError) as caught:
-        await CalendarService(client).sync_rescheduled_appointment(**booking_data)
+        await CalendarService(client).sync_rescheduled_appointment(
+            **booking_data,
+            calendar_id="primary",
+        )
     assert caught.value is error
     assert (appointment.starts_at, appointment.ends_at, appointment.calendar_event_id) == before
     assert client.created == []
 
 
-@pytest.mark.parametrize("missing", ["calendar", "event"])
-async def test_cancel_skips_missing_calendar_or_event(booking_data, missing):
+async def test_cancel_skips_missing_event(booking_data):
     appointment = booking_data["appointment"]
     business = booking_data["business"]
-    appointment.calendar_event_id = "existing-event"
-    if missing == "calendar":
-        business.calendar_id = None
-    else:
-        appointment.calendar_event_id = None
+    appointment.calendar_event_id = None
     client = FakeGoogleCalendarClient()
-    await CalendarService(client).sync_cancelled_appointment(appointment=appointment, business=business)
+    await CalendarService(client).sync_cancelled_appointment(
+        appointment=appointment,
+        business=business,
+        calendar_id="primary",
+    )
     assert client.created == client.updated == client.deleted == []
+
+
+async def test_cancel_uses_explicit_calendar_without_legacy_id(booking_data):
+    appointment = booking_data["appointment"]
+    business = booking_data["business"]
+    business.calendar_id = None
+    appointment.calendar_event_id = "existing-event"
+    client = FakeGoogleCalendarClient()
+
+    await CalendarService(client).sync_cancelled_appointment(
+        appointment=appointment,
+        business=business,
+        calendar_id="resolved-calendar",
+    )
+
+    assert client.deleted == [
+        {
+            "calendar_id": "resolved-calendar",
+            "event_id": "existing-event",
+        }
+    ]
 
 
 async def test_cancel_deletes_existing_event_and_preserves_id(booking_data):
@@ -156,7 +204,10 @@ async def test_cancel_deletes_existing_event_and_preserves_id(booking_data):
     appointment.calendar_event_id = "existing-event"
     client = FakeGoogleCalendarClient()
     await CalendarService(client).sync_cancelled_appointment(
-        appointment=appointment, business=booking_data["business"])
+        appointment=appointment,
+        business=booking_data["business"],
+        calendar_id="primary",
+    )
     assert client.deleted == [{"calendar_id": "primary", "event_id": "existing-event"}]
     assert client.created == client.updated == []
     assert appointment.calendar_event_id == "existing-event"
@@ -174,7 +225,10 @@ async def test_cancel_failure_propagates_without_mutating_appointment(booking_da
 
     with pytest.raises(GoogleCalendarError) as caught:
         await CalendarService(FailingDelete()).sync_cancelled_appointment(
-            appointment=appointment, business=booking_data["business"])
+            appointment=appointment,
+            business=booking_data["business"],
+            calendar_id="primary",
+        )
     assert caught.value is error
     assert appointment.status == "CANCELLED"
     assert appointment.calendar_event_id == "existing-event"

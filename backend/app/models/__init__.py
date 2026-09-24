@@ -22,6 +22,60 @@ class Business(Timestamps, Base):
     phone_number: Mapped[str | None] = mapped_column(String(30))
     calendar_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     customers: Mapped[list["Customer"]] = relationship(back_populates="business")
+    google_calendar_connection: Mapped["GoogleCalendarConnection | None"] = relationship(
+        back_populates="business",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class GoogleCalendarConnection(Timestamps, Base):
+    __tablename__ = "google_calendar_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id",
+            name="uq_google_calendar_connection_business",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    calendar_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="primary",
+    )
+
+    account_email: Mapped[str | None] = mapped_column(
+        String(320),
+        nullable=True,
+    )
+
+    encrypted_refresh_token: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    scopes: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        default=list,
+        nullable=False,
+    )
+
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    business: Mapped["Business"] = relationship(
+        back_populates="google_calendar_connection",
+    )
 
 
 class Customer(Timestamps, Base):

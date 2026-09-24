@@ -14,13 +14,20 @@ from test_conversation_engine import NOW
 from app.api.v1.whatsapp import get_webhook_service, get_whatsapp_settings
 from app.core.config import Settings
 from app.core.database import get_session
+from app.integrations.google_calendar.client import GoogleCalendarClient
 from app.integrations.whatsapp.client import WhatsAppClient, WhatsAppSendError
 from app.integrations.whatsapp.parser import parse_messages
 from app.main import app
-from app.models import Appointment, Business, Conversation, InboundMessage
+from app.models import (
+    Appointment,
+    Business,
+    Conversation,
+    GoogleCalendarConnection,
+    InboundMessage,
+)
 from app.services.conversation.engine import ConversationEngine
 from app.services.whatsapp.webhook import WebhookService
-from app.services.calendar import CalendarService
+from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
 from app.integrations.google_calendar.errors import GoogleCalendarError
 
 URL = "/api/v1/webhooks/whatsapp"
@@ -40,9 +47,12 @@ async def webhook(booking_client):
     sender = AsyncMock(spec=WhatsAppClient)
     calls = []
     fault = {"after_engine": False}
-    calendar = AsyncMock(spec=CalendarService)
-    calendar.sync_created_appointment.return_value = "google-event-123"
+    calendar = AsyncMock(spec=GoogleCalendarClient)
+    calendar.create_event.return_value = "google-event-123"
     fault["calendar"] = calendar
+    resolver = AsyncMock(spec=CalendarClientResolver)
+    resolver.resolve.return_value = None
+    fault["resolver"] = resolver
 
     class TestEngine(ConversationEngine):
         async def handle_message_in_transaction(self, business_id, phone, text):
@@ -59,7 +69,7 @@ async def webhook(booking_client):
     def service(session=Depends(get_session)):
         fault["session"] = session
         return WebhookService(session, sender, config, TestEngine(session, clock=lambda: NOW),
-                              calendar_service=calendar)
+                              calendar_resolver=resolver)
 
     app.dependency_overrides[get_webhook_service] = service
     app.dependency_overrides[get_whatsapp_settings] = lambda: config
@@ -216,7 +226,7 @@ async def test_engine_failure_rolls_back_inbound_and_booking(webhook):
         (await session.get(Business, 1)).calendar_id = "primary"
     with pytest.raises(RuntimeError, match="Simulated failure"):
         await client.post(URL, json=envelope("1", "wamid.confirm"))
-    fault["calendar"].sync_created_appointment.assert_not_awaited()
+    fault["calendar"].create_event.assert_not_awaited()
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Appointment)) == 0
         assert await session.scalar(select(InboundMessage).where(InboundMessage.external_message_id == "wamid.confirm")) is None
@@ -297,14 +307,19 @@ async def test_graph_client_sanitizes_provider_error():
     assert "sensitive" not in str(error.value)
 
 
-async def enable_calendar(sessions):
+async def enable_calendar(sessions, fault, *, source="legacy"):
     async with sessions.begin() as session:
         (await session.get(Business, 1)).calendar_id = "primary"
+    fault["resolver"].resolve.return_value = ResolvedCalendar(
+        calendar_id="primary",
+        client=fault["calendar"],
+        source=source,
+    )
 
 
 async def test_calendar_runs_after_commit_and_persists_id(webhook):
     client, sessions, sender, _, fault, _ = webhook
-    await enable_calendar(sessions)
+    await enable_calendar(sessions, fault)
     await confirm_setup(client)
     sender.send_text.reset_mock()
 
@@ -312,7 +327,7 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
         assert not fault["session"].in_transaction()
         sender.send_text.assert_not_awaited()
         async with sessions() as session:
-            appointment = await session.get(Appointment, kwargs["appointment"].id)
+            appointment = await session.scalar(select(Appointment))
             assert appointment.status == "CONFIRMED"
             inbound = await session.scalar(select(InboundMessage).where(
                 InboundMessage.external_message_id == "wamid.confirm"))
@@ -320,9 +335,9 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
             assert inbound.payload["sent_count"] == 0
         return "google-event-123"
 
-    fault["calendar"].sync_created_appointment.side_effect = sync
+    fault["calendar"].create_event.side_effect = sync
     assert (await client.post(URL, json=envelope("1", "wamid.confirm"))).status_code == 200
-    fault["calendar"].sync_created_appointment.assert_awaited_once()
+    fault["calendar"].create_event.assert_awaited_once()
     async with sessions() as session:
         assert (await session.scalar(select(Appointment))).calendar_event_id == "google-event-123"
     assert sender.send_text.await_count == 1
@@ -330,7 +345,7 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
 
 async def test_calendar_not_repeated_on_duplicate_or_delivery_retry(webhook):
     client, sessions, sender, _, fault, _ = webhook
-    await enable_calendar(sessions)
+    await enable_calendar(sessions, fault)
     await confirm_setup(client)
     sender.send_text.reset_mock()
     sender.send_text.side_effect = [WhatsAppSendError("offline"), None]
@@ -338,20 +353,20 @@ async def test_calendar_not_repeated_on_duplicate_or_delivery_retry(webhook):
     assert (await client.post(URL, json=payload)).status_code == 503
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
-    fault["calendar"].sync_created_appointment.assert_awaited_once()
+    fault["calendar"].create_event.assert_awaited_once()
     assert sender.send_text.await_count == 2
 
 
 async def test_calendar_failure_preserves_booking_processing_and_delivery(webhook):
     client, sessions, sender, _, fault, _ = webhook
-    await enable_calendar(sessions)
+    await enable_calendar(sessions, fault)
     await confirm_setup(client)
     sender.send_text.reset_mock()
-    fault["calendar"].sync_created_appointment.side_effect = GoogleCalendarError("insert", status_code=503)
+    fault["calendar"].create_event.side_effect = GoogleCalendarError("insert", status_code=503)
     payload = envelope("1", "wamid.confirm")
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
-    fault["calendar"].sync_created_appointment.assert_awaited_once()
+    fault["calendar"].create_event.assert_awaited_once()
     assert sender.send_text.await_count == 1
     async with sessions() as session:
         appointment = await session.scalar(select(Appointment))
@@ -368,18 +383,64 @@ async def test_disabled_calendar_does_not_sync(webhook):
     client, _, _, _, fault, _ = webhook
     await confirm_setup(client)
     assert (await client.post(URL, json=envelope("1", "wamid.confirm"))).status_code == 200
-    fault["calendar"].sync_created_appointment.assert_not_awaited()
+    fault["calendar"].create_event.assert_not_awaited()
+
+
+async def test_oauth_calendar_syncs_without_legacy_business_calendar_id(webhook):
+    client, sessions, sender, _, fault, _ = webhook
+    async with sessions.begin() as session:
+        business = await session.get(Business, 1)
+        assert business.calendar_id is None
+        session.add(
+            GoogleCalendarConnection(
+                business_id=1,
+                calendar_id="primary",
+                encrypted_refresh_token="encrypted-token",
+                scopes=["calendar.events"],
+            )
+        )
+
+    fault["resolver"].resolve.return_value = ResolvedCalendar(
+        calendar_id="primary",
+        client=fault["calendar"],
+        source="oauth",
+    )
+
+    await confirm_setup(client)
+    sender.send_text.reset_mock()
+    response = await client.post(
+        URL,
+        json=envelope("1", "wamid.confirm"),
+    )
+
+    assert response.status_code == 200
+    fault["resolver"].resolve.assert_awaited_once_with(1)
+    fault["calendar"].create_event.assert_awaited_once()
+    assert fault["calendar"].create_event.await_args.kwargs["calendar_id"] == "primary"
+    assert sender.send_text.await_count == 1
+
+    async with sessions() as session:
+        business = await session.get(Business, 1)
+        appointment = await session.scalar(select(Appointment))
+        assert business.calendar_id is None
+        assert appointment.status == "CONFIRMED"
+        assert appointment.calendar_event_id == "google-event-123"
 
 
 async def test_linked_appointment_is_not_created_again(webhook):
     client, sessions, _, _, fault, _ = webhook
-    await enable_calendar(sessions)
+    await enable_calendar(sessions, fault)
     await confirm_setup(client)
     assert (await client.post(URL, json=envelope("1", "wamid.confirm"))).status_code == 200
-    fault["calendar"].sync_created_appointment.reset_mock()
+    fault["calendar"].create_event.reset_mock()
     async with sessions() as session:
         async with session.begin():
             appointment_id = await session.scalar(select(Appointment.id))
-        orchestrator = WebhookService(session, None, None, calendar_service=fault["calendar"])
+        orchestrator = WebhookService(
+            session,
+            None,
+            None,
+            calendar_resolver=fault["resolver"],
+        )
         await orchestrator._sync_calendar(appointment_id)
-    fault["calendar"].sync_created_appointment.assert_not_awaited()
+    fault["calendar"].create_event.assert_not_awaited()

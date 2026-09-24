@@ -7,10 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_session
-from app.integrations.google_calendar.factory import calendar_client_from_token
-from app.services.calendar import CalendarService
 from app.integrations.whatsapp.client import WhatsAppClient, WhatsAppConfigurationError, WhatsAppSendError
 from app.integrations.whatsapp.signature import verify_webhook_signature
+from app.services.calendar_resolver import CalendarClientResolver
 from app.services.whatsapp.webhook import WebhookService, verify_webhook
 
 router = APIRouter()
@@ -23,8 +22,12 @@ def get_whatsapp_settings():
 
 def get_webhook_service(session: Annotated[AsyncSession, Depends(get_session)],
                         config=Depends(get_whatsapp_settings)):
-    calendar = CalendarService(calendar_client_from_token(config.google_calendar_token_file))
-    return WebhookService(session, WhatsAppClient(config), config, calendar_service=calendar)
+    return WebhookService(
+        session,
+        WhatsAppClient(config),
+        config,
+        calendar_resolver=CalendarClientResolver(session),
+    )
 
 
 @router.get("/webhooks/whatsapp", response_class=PlainTextResponse)

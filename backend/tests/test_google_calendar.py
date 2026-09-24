@@ -148,3 +148,130 @@ async def test_token_factory_uses_fresh_credentials_and_bounded_transport(monkey
     assert authorized.call_args_list[0].args[0] is not authorized.call_args_list[1].args[0]
     assert all(call.kwargs == {"timeout": 20} for call in transport.call_args_list)
     assert all(call.kwargs["static_discovery"] for call in build.call_args_list)
+
+
+async def test_connection_factory_decrypts_lazily_and_uses_bounded_transport(
+    monkeypatch,
+):
+    from app.integrations.google_calendar import factory
+
+    cipher = MagicMock()
+    cipher.decrypt.return_value = "real-refresh-token"
+
+    credentials = MagicMock(side_effect=lambda **kwargs: object())
+    transport = MagicMock(side_effect=lambda **kwargs: MagicMock())
+    authorized = MagicMock(side_effect=lambda *args, **kwargs: MagicMock())
+    build = MagicMock(side_effect=lambda *args, **kwargs: sdk())
+
+    monkeypatch.setattr(factory, "Credentials", credentials)
+    monkeypatch.setattr(factory.httplib2, "Http", transport)
+    monkeypatch.setattr(factory, "AuthorizedHttp", authorized)
+    monkeypatch.setattr(factory, "build", build)
+
+    client = factory.calendar_client_from_connection(
+        encrypted_refresh_token="encrypted-refresh-token",
+        scopes=[
+            "https://www.googleapis.com/auth/calendar.events"
+        ],
+        cipher=cipher,
+        client_id="client-id",
+        client_secret="client-secret",
+    )
+
+    # Building the dependency must not expose the refresh token yet.
+    cipher.decrypt.assert_not_called()
+
+    await client.delete_event("primary", "event-id")
+
+    cipher.decrypt.assert_called_once_with(
+        "encrypted-refresh-token"
+    )
+
+    credentials.assert_called_once_with(
+        token=None,
+        refresh_token="real-refresh-token",
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id="client-id",
+        client_secret="client-secret",
+        scopes=[
+            "https://www.googleapis.com/auth/calendar.events"
+        ],
+    )
+
+    assert transport.call_args.kwargs == {
+        "timeout": 20
+    }
+
+    assert build.call_args.args[:2] == (
+        "calendar",
+        "v3",
+    )
+
+    assert build.call_args.kwargs[
+        "cache_discovery"
+    ] is False
+
+    assert build.call_args.kwargs[
+        "static_discovery"
+    ] is True
+
+
+async def test_connection_factory_maps_decryption_failure_to_calendar_error(
+    monkeypatch,
+):
+    from app.integrations.google_calendar import factory
+    from app.security.credentials import (
+        CredentialDecryptionError,
+    )
+
+    cipher = MagicMock()
+    cipher.decrypt.side_effect = CredentialDecryptionError(
+        "invalid ciphertext"
+    )
+
+    client = factory.calendar_client_from_connection(
+        encrypted_refresh_token="invalid-ciphertext",
+        scopes=[
+            "https://www.googleapis.com/auth/calendar.events"
+        ],
+        cipher=cipher,
+        client_id="client-id",
+        client_secret="client-secret",
+    )
+
+    with pytest.raises(GoogleCalendarError) as error:
+        await client.create_event("primary", {})
+
+    assert error.value.operation == "credentials"
+
+
+@pytest.mark.parametrize(
+    ("encrypted_refresh_token", "scopes", "client_id", "client_secret"),
+    [
+        ("", ["scope"], "client-id", "client-secret"),
+        ("encrypted", [], "client-id", "client-secret"),
+        ("encrypted", ["scope"], "", "client-secret"),
+        ("encrypted", ["scope"], "client-id", ""),
+    ],
+)
+async def test_connection_factory_rejects_incomplete_credentials(
+    encrypted_refresh_token,
+    scopes,
+    client_id,
+    client_secret,
+):
+    from app.integrations.google_calendar import factory
+
+    cipher = MagicMock()
+
+    with pytest.raises(GoogleCalendarError) as error:
+        factory.calendar_client_from_connection(
+            encrypted_refresh_token=encrypted_refresh_token,
+            scopes=scopes,
+            cipher=cipher,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+    assert error.value.operation == "credentials"
+    cipher.decrypt.assert_not_called()

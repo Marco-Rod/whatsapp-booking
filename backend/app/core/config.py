@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     meta_app_secret: SecretStr = SecretStr("")
 
     google_calendar_token_file: str = "../token.json"
+    google_oauth_client_id: SecretStr | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    google_oauth_redirect_uri: str = ""
+    credential_encryption_key: SecretStr | None = None
+
+    google_oauth_client_id: SecretStr | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    google_oauth_redirect_uri: str | None = None
 
     cors_allowed_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",

@@ -64,20 +64,18 @@ class CalendarService:
 
     async def sync_created_appointment(
         self, *, appointment: "Appointment", business: "Business",
-        service: "Service", customer: "Customer",
+        service: "Service", customer: "Customer", calendar_id: str,
     ) -> str | None:
         """Create an event if enabled, without modifying or saving the appointment.
 
         The caller must invoke this after the booking transaction commits and
         persist the returned ID separately. Integration errors propagate.
         """
-        if not business.calendar_id:
-            return None
         event = CalendarEventData.from_appointment(
             appointment=appointment, business=business,
             service=service, customer=customer,
         )
-        return await self.create(calendar_id=business.calendar_id, event=event)
+        return await self.create(calendar_id=calendar_id, event=event)
 
     async def create(self, *, calendar_id: str, event: CalendarEventData) -> str:
         return await self.client.create_event(
@@ -86,16 +84,16 @@ class CalendarService:
 
     async def sync_rescheduled_appointment(
         self, *, appointment: "Appointment", business: "Business",
-        service: "Service", customer: "Customer",
+        service: "Service", customer: "Customer", calendar_id: str,
     ) -> None:
         """Update only a linked event; never mutate the appointment or create one."""
-        if not business.calendar_id or not appointment.calendar_event_id:
+        if not appointment.calendar_event_id:
             return
         event = CalendarEventData.from_appointment(
             appointment=appointment, business=business, service=service, customer=customer,
         )
         await self.update(
-            calendar_id=business.calendar_id,
+            calendar_id=calendar_id,
             event_id=appointment.calendar_event_id, event=event,
         )
 
@@ -111,8 +109,9 @@ class CalendarService:
 
     async def sync_cancelled_appointment(
         self, *, appointment: "Appointment", business: "Business",
+        calendar_id: str,
     ) -> None:
         """Delete the associated event without clearing its ID on the appointment."""
-        if not business.calendar_id or not appointment.calendar_event_id:
+        if not appointment.calendar_event_id:
             return
-        await self.delete(calendar_id=business.calendar_id, event_id=appointment.calendar_event_id)
+        await self.delete(calendar_id=calendar_id, event_id=appointment.calendar_event_id)

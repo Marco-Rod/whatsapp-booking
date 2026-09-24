@@ -11,6 +11,8 @@ from app.integrations.whatsapp.client import WhatsAppConfigurationError
 from app.integrations.whatsapp.parser import parse_messages
 from app.repositories.booking import BookingRepository
 from app.repositories.inbound_messages import InboundMessageRepository
+from app.services.calendar import CalendarService
+from app.services.calendar_resolver import CalendarClientResolver
 from app.services.conversation.engine import ConversationEngine
 
 logger = logging.getLogger(__name__)
@@ -26,13 +28,13 @@ def verify_webhook(config, mode, token, challenge):
 
 
 class WebhookService:
-    def __init__(self, session, client, config, engine=None, calendar_service=None):
+    def __init__(self, session, client, config, engine=None, calendar_resolver=None):
         self.session = session
         self.client = client
         self.config = config
         self.repository = InboundMessageRepository(session)
         self.engine = engine or ConversationEngine(session)
-        self.calendar_service = calendar_service
+        self.calendar_resolver: CalendarClientResolver | None = calendar_resolver
 
     async def process(self, payload):
         messages = parse_messages(payload)
@@ -65,7 +67,7 @@ class WebhookService:
             await self._deliver(inbound_id)
 
     async def _sync_calendar(self, appointment_id: int) -> None:
-        if self.calendar_service is None:
+        if self.calendar_resolver is None:
             return
         try:
             # Finish the read transaction too before making the external call.
@@ -74,7 +76,12 @@ class WebhookService:
                 if appointment is None or appointment.calendar_event_id is not None:
                     return
                 business = await self.session.get(Business, appointment.business_id)
-                if business is None or not business.calendar_id:
+                if business is None:
+                    return
+                resolved = await self.calendar_resolver.resolve(
+                    appointment.business_id
+                )
+                if resolved is None:
                     return
                 service = await self.session.get(Service, appointment.service_id)
                 customer = await self.session.get(Customer, appointment.customer_id) if appointment.customer_id else None
@@ -83,8 +90,13 @@ class WebhookService:
                 # Loaded scalar snapshots remain usable with expire_on_commit=True.
                 for obj in (appointment, business, service, customer):
                     self.session.expunge(obj)
-            event_id = await self.calendar_service.sync_created_appointment(
-                appointment=appointment, business=business, service=service, customer=customer,
+            calendar = CalendarService(resolved.client)
+            event_id = await calendar.sync_created_appointment(
+                appointment=appointment,
+                business=business,
+                service=service,
+                customer=customer,
+                calendar_id=resolved.calendar_id,
             )
             if event_id is not None:
                 async with self.session.begin():

@@ -5,13 +5,14 @@ import pytest
 import pytest_asyncio
 
 from test_booking import booking_client, create, move
-from app.api.v1.appointments import get_calendar_service
+from app.api.v1.appointments import get_calendar_resolver
 from app.core.database import get_session
 from app.integrations.google_calendar.client import GoogleCalendarClient
 from app.integrations.google_calendar.errors import GoogleCalendarError
 from app.main import app
-from app.models import Appointment, Business
+from app.models import Appointment, Business, GoogleCalendarConnection
 from app.services.calendar import CalendarService
+from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
 
 
 @pytest_asyncio.fixture
@@ -22,7 +23,15 @@ async def linked_booking(booking_client):
         (await session.get(Business, 1)).calendar_id = "primary"
         (await session.get(Appointment, original["id"])).calendar_event_id = "existing-event"
     google = AsyncMock(spec=GoogleCalendarClient)
+    google.create_event.return_value = "created-event"
+    resolver = AsyncMock(spec=CalendarClientResolver)
+    resolver.resolve.return_value = ResolvedCalendar(
+        calendar_id="primary",
+        client=google,
+        source="oauth",
+    )
     active = {}
+    active["resolver"] = resolver
 
     async def get_test_session():
         async with sessions() as session:
@@ -30,11 +39,11 @@ async def linked_booking(booking_client):
             yield session
 
     app.dependency_overrides[get_session] = get_test_session
-    app.dependency_overrides[get_calendar_service] = lambda: CalendarService(google)
+    app.dependency_overrides[get_calendar_resolver] = lambda: resolver
     try:
         yield client, sessions, original, google, active
     finally:
-        app.dependency_overrides.pop(get_calendar_service, None)
+        app.dependency_overrides.pop(get_calendar_resolver, None)
 
 
 async def test_reschedule_commits_before_google_update(linked_booking):
@@ -80,6 +89,7 @@ async def test_rejected_reschedule_never_calls_google(linked_booking, kind, stat
     start = "2026-09-19T15:30:00-06:00"
     if kind == "conflict":
         assert (await create(client, starts_at=start)).status_code == 201
+        google.reset_mock()
     elif kind == "closed":
         start = "2026-09-20T15:30:00-06:00"
     else:
@@ -94,12 +104,52 @@ async def test_rejected_reschedule_never_calls_google(linked_booking, kind, stat
         assert appointment.calendar_event_id == "existing-event"
 
 
+async def test_create_uses_oauth_when_business_has_no_legacy_calendar_id(
+    booking_client,
+):
+    client, sessions, _ = booking_client
+    async with sessions.begin() as session:
+        business = await session.get(Business, 1)
+        assert business.calendar_id is None
+        session.add(
+            GoogleCalendarConnection(
+                business_id=1,
+                calendar_id="primary",
+                encrypted_refresh_token="encrypted-token",
+                scopes=["calendar.events"],
+            )
+        )
+
+    google = AsyncMock(spec=GoogleCalendarClient)
+    google.create_event.return_value = "oauth-event"
+    resolver = AsyncMock(spec=CalendarClientResolver)
+    resolver.resolve.return_value = ResolvedCalendar(
+        calendar_id="primary",
+        client=google,
+        source="oauth",
+    )
+    app.dependency_overrides[get_calendar_resolver] = lambda: resolver
+    try:
+        response = await create(client)
+    finally:
+        app.dependency_overrides.pop(get_calendar_resolver, None)
+
+    assert response.status_code == 201
+    resolver.resolve.assert_awaited_once_with(1)
+    google.create_event.assert_awaited_once()
+    assert google.create_event.await_args.kwargs["calendar_id"] == "primary"
+
+    async with sessions() as session:
+        appointment = await session.get(Appointment, response.json()["id"])
+        assert appointment.calendar_event_id == "oauth-event"
+
+
 @pytest.mark.parametrize("missing", ["calendar", "event"])
 async def test_reschedule_without_calendar_link_still_succeeds(linked_booking, missing):
     client, sessions, original, google, _ = linked_booking
     async with sessions.begin() as session:
         if missing == "calendar":
-            (await session.get(Business, 1)).calendar_id = None
+            linked_booking[4]["resolver"].resolve.return_value = None
         else:
             (await session.get(Appointment, original["id"])).calendar_event_id = None
     assert (await move(client, original["id"])).status_code == 200

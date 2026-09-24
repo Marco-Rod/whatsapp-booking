@@ -14,5 +14,8 @@ frontend/test-results/
 frontend/playwright-report/
 *.tsbuildinfo
 
+# Frontend local environment
+frontend/.env.local
+
 # Private SSH keys
 *.pem

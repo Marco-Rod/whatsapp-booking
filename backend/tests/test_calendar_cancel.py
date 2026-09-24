@@ -51,10 +51,10 @@ async def test_failed_google_delete_keeps_cancelled_and_id_without_implicit_retr
 
 @pytest.mark.parametrize("missing", ["calendar", "event"])
 async def test_cancel_without_calendar_or_event(linked_booking, missing):
-    client, sessions, original, google, _ = linked_booking
+    client, sessions, original, google, active = linked_booking
     async with sessions.begin() as session:
         if missing == "calendar":
-            (await session.get(Business, 1)).calendar_id = None
+            active["resolver"].resolve.return_value = None
         else:
             (await session.get(Appointment, original["id"])).calendar_event_id = None
     assert (await cancel(client, original["id"])).status_code == 200
