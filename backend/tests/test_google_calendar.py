@@ -122,34 +122,6 @@ async def test_concurrent_requests_use_separate_services_and_keep_loop_responsiv
     assert len(services) == 2 and services[0] is not services[1]
 
 
-async def test_missing_oauth_file_is_a_calendar_error(tmp_path):
-    from app.integrations.google_calendar.factory import calendar_client_from_token
-
-    client = calendar_client_from_token(str(tmp_path / "missing-token.json"))
-    with pytest.raises(GoogleCalendarError) as error:
-        await client.create_event("primary", {})
-    assert error.value.operation == "credentials"
-
-
-async def test_token_factory_uses_fresh_credentials_and_bounded_transport(monkeypatch):
-    from app.integrations.google_calendar import factory
-
-    credentials = MagicMock(side_effect=lambda *args: object())
-    transport = MagicMock(side_effect=lambda **kwargs: MagicMock())
-    authorized = MagicMock(side_effect=lambda *args, **kwargs: MagicMock())
-    build = MagicMock(side_effect=lambda *args, **kwargs: sdk())
-    monkeypatch.setattr(factory.Credentials, "from_authorized_user_file", credentials)
-    monkeypatch.setattr(factory.httplib2, "Http", transport)
-    monkeypatch.setattr(factory, "AuthorizedHttp", authorized)
-    monkeypatch.setattr(factory, "build", build)
-    client = factory.calendar_client_from_token("test-token.json")
-    await asyncio.gather(client.delete_event("primary", "a"), client.delete_event("primary", "b"))
-    assert credentials.call_count == authorized.call_count == build.call_count == 2
-    assert authorized.call_args_list[0].args[0] is not authorized.call_args_list[1].args[0]
-    assert all(call.kwargs == {"timeout": 20} for call in transport.call_args_list)
-    assert all(call.kwargs["static_discovery"] for call in build.call_args_list)
-
-
 async def test_connection_factory_decrypts_lazily_and_uses_bounded_transport(
     monkeypatch,
 ):

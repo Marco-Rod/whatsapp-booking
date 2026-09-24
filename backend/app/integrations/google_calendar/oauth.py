@@ -23,7 +23,7 @@ class GoogleOAuthExchangeError(RuntimeError):
 
 @dataclass(frozen=True)
 class GoogleOAuthTokens:
-    refresh_token: str
+    refresh_token: str | None
     scopes: list[str]
 
 
@@ -119,11 +119,6 @@ class GoogleOAuthService:
             ) from exc
 
         credentials = flow.credentials
-
-        if not credentials.refresh_token:
-            raise GoogleOAuthExchangeError(
-                "Google OAuth did not return a refresh token"
-            )
 
         return GoogleOAuthTokens(
             refresh_token=credentials.refresh_token,

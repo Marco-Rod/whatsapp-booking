@@ -6,11 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.integrations.google_calendar.client import GoogleCalendarClient
 from app.integrations.google_calendar.errors import GoogleCalendarError
-from app.integrations.google_calendar.factory import (
-    calendar_client_from_connection,
-    calendar_client_from_token,
-)
-from app.models import Business, GoogleCalendarConnection
+from app.integrations.google_calendar.factory import calendar_client_from_connection
+from app.models import GoogleCalendarConnection
 from app.security.credentials import CredentialCipher
 from app.security.factory import build_credential_cipher
 
@@ -19,7 +16,6 @@ from app.security.factory import build_credential_cipher
 class ResolvedCalendar:
     calendar_id: str
     client: GoogleCalendarClient
-    source: str
 
 
 class CalendarClientResolver:
@@ -63,21 +59,6 @@ class CalendarClientResolver:
             return ResolvedCalendar(
                 calendar_id=connection.calendar_id,
                 client=client,
-                source="oauth",
             )
 
-        business = await self.session.get(
-            Business,
-            business_id,
-        )
-
-        if business is None or not business.calendar_id:
-            return None
-
-        return ResolvedCalendar(
-            calendar_id=business.calendar_id,
-            client=calendar_client_from_token(
-                settings.google_calendar_token_file
-            ),
-            source="legacy",
-        )
+        return None

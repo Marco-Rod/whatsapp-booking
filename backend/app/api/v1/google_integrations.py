@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +28,83 @@ callback_router = APIRouter(
     prefix="/integrations/google",
     tags=["google-integrations"],
 )
+
+
+class GoogleIntegrationStatus(BaseModel):
+    connected: bool
+    calendar_id: str | None = None
+    connected_at: datetime | None = None
+
+
+class GoogleDisconnectResult(BaseModel):
+    connected: bool
+
+
+@router.get(
+    "",
+    response_model=GoogleIntegrationStatus,
+)
+async def get_google_integration_status(
+    business_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> GoogleIntegrationStatus:
+    business = await session.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    connection = await session.scalar(
+        select(GoogleCalendarConnection).where(
+            GoogleCalendarConnection.business_id
+            == business_id
+        )
+    )
+
+    if connection is None:
+        return GoogleIntegrationStatus(
+            connected=False,
+        )
+
+    return GoogleIntegrationStatus(
+        connected=True,
+        calendar_id=connection.calendar_id,
+        connected_at=connection.connected_at,
+    )
+
+
+@router.delete(
+    "",
+    response_model=GoogleDisconnectResult,
+)
+async def disconnect_google_calendar(
+    business_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> GoogleDisconnectResult:
+    business = await session.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    connection = await session.scalar(
+        select(GoogleCalendarConnection).where(
+            GoogleCalendarConnection.business_id
+            == business_id
+        )
+    )
+
+    if connection is not None:
+        await session.delete(connection)
+        await session.commit()
+
+    return GoogleDisconnectResult(
+        connected=False,
+    )
 
 
 @router.get("/connect")
@@ -101,12 +181,6 @@ async def google_calendar_callback(
             detail="Unable to complete Google OAuth",
         ) from exc
 
-    cipher = build_credential_cipher()
-
-    encrypted_refresh_token = cipher.encrypt(
-        tokens.refresh_token
-    )
-
     connection = await session.scalar(
         select(GoogleCalendarConnection).where(
             GoogleCalendarConnection.business_id
@@ -115,19 +189,32 @@ async def google_calendar_callback(
     )
 
     if connection is None:
+        if not tokens.refresh_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Google did not provide a refresh token",
+            )
+
+        cipher = build_credential_cipher()
         connection = GoogleCalendarConnection(
             business_id=business.id,
             calendar_id="primary",
-            encrypted_refresh_token=encrypted_refresh_token,
+            encrypted_refresh_token=cipher.encrypt(
+                tokens.refresh_token
+            ),
             scopes=tokens.scopes,
+            connected_at=datetime.now(timezone.utc),
         )
         session.add(connection)
     else:
+        if tokens.refresh_token:
+            cipher = build_credential_cipher()
+            connection.encrypted_refresh_token = cipher.encrypt(
+                tokens.refresh_token
+            )
         connection.calendar_id = "primary"
-        connection.encrypted_refresh_token = (
-            encrypted_refresh_token
-        )
         connection.scopes = tokens.scopes
+        connection.connected_at = datetime.now(timezone.utc)
 
     await session.commit()
 

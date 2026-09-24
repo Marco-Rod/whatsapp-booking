@@ -20,7 +20,6 @@ class Business(Timestamps, Base):
     name: Mapped[str] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(100), default="America/Mexico_City")
     phone_number: Mapped[str | None] = mapped_column(String(30))
-    calendar_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     customers: Mapped[list["Customer"]] = relationship(back_populates="business")
     google_calendar_connection: Mapped["GoogleCalendarConnection | None"] = relationship(
         back_populates="business",

@@ -6,17 +6,17 @@ created appointment. `WebhookService` syncs after committing the conversation,
 appointment and processed inbound message; it closes its read transaction before
 calling Google and saves the external ID in a separate transaction.
 
-A null `Business.calendar_id` disables Calendar. Existing event IDs are skipped.
+The absence of a `GoogleCalendarConnection` disables Calendar. Existing event IDs are skipped.
 Duplicate processed inbound messages only resume pending WhatsApp delivery;
 they do not retry Calendar, even if an earlier sync failed. Google failures leave
 the confirmed appointment intact and do not suppress the WhatsApp reply.
 
 ## Local setup and verification
 
-The API reads `GOOGLE_CALENDAR_TOKEN_FILE` (default `../token.json`, relative to
-the backend working directory). Authorize manually using the OAuth test script
-first. The API never opens a browser. Each SDK operation gets fresh credentials
-and an independent HTTP transport with a 20-second socket timeout.
+The API resolves the business's encrypted `GoogleCalendarConnection` from
+PostgreSQL. The refresh token is decrypted only in memory when an SDK operation
+starts. Each operation gets fresh credentials and an independent HTTP transport
+with a 20-second socket timeout.
 
 Run from `backend/` with its virtual environment:
 
@@ -25,13 +25,13 @@ python -m pytest -q
 python ../scripts/replay_google_calendar.py
 ```
 
-The replay enables `primary` on Bella Studio, creates one real confirmed booking
+The replay resolves the business's stored OAuth connection, creates one real confirmed booking
 and Calendar event, reads the event back, and checks a duplicate confirmation.
 It captures WhatsApp replies locally; no WhatsApp messages are sent. It leaves
 the test records in place and refuses to reuse its fictional test customer.
 It uses local code and the configured database, not a rebuilt Docker API.
-Container deployment requires its own configured token path and secret mount;
-credentials must never be copied into the image.
+Container deployment requires its OAuth client credentials and stable credential
+encryption key; credentials must never be copied into the image.
 
 ## Recovery boundary
 

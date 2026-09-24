@@ -16,14 +16,13 @@ def booking_data():
             starts_at=datetime(2026, 9, 17, 18, tzinfo=timezone.utc),
             ends_at=datetime(2026, 9, 17, 19, tzinfo=timezone.utc),
         ),
-        "business": Business(name="Bella Studio", timezone="America/Mexico_City", calendar_id="primary"),
+        "business": Business(name="Bella Studio", timezone="America/Mexico_City"),
         "service": Service(name="Corte"),
         "customer": Customer(name="", phone="+525512345678"),
     }
 
 
 async def test_sync_created_appointment_uses_explicit_calendar_id(booking_data):
-    booking_data["business"].calendar_id = None
     client = FakeGoogleCalendarClient()
     result = await CalendarService(client).sync_created_appointment(
         **booking_data,
@@ -115,8 +114,7 @@ async def test_reschedule_skips_missing_event(booking_data):
     assert client.created == client.updated == client.deleted == []
 
 
-async def test_reschedule_uses_explicit_calendar_without_legacy_id(booking_data):
-    booking_data["business"].calendar_id = None
+async def test_reschedule_uses_explicit_calendar_id(booking_data):
     booking_data["appointment"].calendar_event_id = "existing-event"
     client = FakeGoogleCalendarClient()
 
@@ -177,10 +175,9 @@ async def test_cancel_skips_missing_event(booking_data):
     assert client.created == client.updated == client.deleted == []
 
 
-async def test_cancel_uses_explicit_calendar_without_legacy_id(booking_data):
+async def test_cancel_uses_explicit_calendar_id(booking_data):
     appointment = booking_data["appointment"]
     business = booking_data["business"]
-    business.calendar_id = None
     appointment.calendar_event_id = "existing-event"
     client = FakeGoogleCalendarClient()
 

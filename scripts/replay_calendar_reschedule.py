@@ -13,11 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import settings
 from app.core.database import Session, engine
-from app.integrations.google_calendar.factory import calendar_client_from_token
 from app.main import app
 from app.models import Appointment, Business, Customer
+from app.services.calendar_resolver import CalendarClientResolver
 
 APPOINTMENT_ID = 3
 NEW_START = "2026-09-18T16:00:00-06:00"
@@ -29,18 +28,25 @@ async def run():
         assert appointment is not None and appointment.status == "CONFIRMED"
         business = await session.get(Business, appointment.business_id)
         customer = await session.get(Customer, appointment.customer_id)
-        assert business.name == "Bella Studio" and business.calendar_id == "primary"
+        assert business.name == "Bella Studio"
         assert customer.phone == "+15555550199", "Expected the CREATE replay test customer"
+        resolved = await CalendarClientResolver(session).resolve(
+            appointment.business_id
+        )
+        assert resolved is not None, "Business has no Google Calendar connection"
         event_id = appointment.calendar_event_id
         assert event_id, "Appointment must already be linked to an event"
         old_start = appointment.starts_at
         old_end = appointment.ends_at
 
-    google = calendar_client_from_token(settings.google_calendar_token_file)
+    google = resolved.client
 
     def read_event():
         with google._service_factory() as service:
-            return service.events().get(calendarId="primary", eventId=event_id).execute(num_retries=0)
+            return service.events().get(
+                calendarId=resolved.calendar_id,
+                eventId=event_id,
+            ).execute(num_retries=0)
 
     before = await asyncio.to_thread(read_event)
     assert datetime.fromisoformat(before["start"]["dateTime"]) == old_start

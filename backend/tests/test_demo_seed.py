@@ -47,13 +47,12 @@ async def test_existing_configuration_and_booking_untouched(sessions):
     async with sessions.begin() as session:
         business = await session.get(Business, business_id)
         business.phone_number = "existing-number"
-        business.calendar_id = "existing-calendar"
         appointment = await session.scalar(select(Appointment).order_by(Appointment.id))
         appointment.status = "CANCELLED"
     await seed(sessions)
     async with sessions() as session:
         business = await session.get(Business, business_id)
-        assert (business.phone_number, business.calendar_id) == ("existing-number", "existing-calendar")
+        assert business.phone_number == "existing-number"
         assert (await session.scalar(select(Appointment).order_by(Appointment.id))).status == "CANCELLED"
 
 

@@ -222,8 +222,6 @@ async def test_engine_failure_rolls_back_inbound_and_booking(webhook):
     client, sessions, sender, calls, fault, _ = webhook
     await confirm_setup(client)
     fault["after_engine"] = True
-    async with sessions.begin() as session:
-        (await session.get(Business, 1)).calendar_id = "primary"
     with pytest.raises(RuntimeError, match="Simulated failure"):
         await client.post(URL, json=envelope("1", "wamid.confirm"))
     fault["calendar"].create_event.assert_not_awaited()
@@ -307,13 +305,10 @@ async def test_graph_client_sanitizes_provider_error():
     assert "sensitive" not in str(error.value)
 
 
-async def enable_calendar(sessions, fault, *, source="legacy"):
-    async with sessions.begin() as session:
-        (await session.get(Business, 1)).calendar_id = "primary"
+async def enable_calendar(sessions, fault):
     fault["resolver"].resolve.return_value = ResolvedCalendar(
         calendar_id="primary",
         client=fault["calendar"],
-        source=source,
     )
 
 
@@ -386,11 +381,9 @@ async def test_disabled_calendar_does_not_sync(webhook):
     fault["calendar"].create_event.assert_not_awaited()
 
 
-async def test_oauth_calendar_syncs_without_legacy_business_calendar_id(webhook):
+async def test_oauth_calendar_syncs_from_stored_connection(webhook):
     client, sessions, sender, _, fault, _ = webhook
     async with sessions.begin() as session:
-        business = await session.get(Business, 1)
-        assert business.calendar_id is None
         session.add(
             GoogleCalendarConnection(
                 business_id=1,
@@ -403,7 +396,6 @@ async def test_oauth_calendar_syncs_without_legacy_business_calendar_id(webhook)
     fault["resolver"].resolve.return_value = ResolvedCalendar(
         calendar_id="primary",
         client=fault["calendar"],
-        source="oauth",
     )
 
     await confirm_setup(client)
@@ -420,9 +412,7 @@ async def test_oauth_calendar_syncs_without_legacy_business_calendar_id(webhook)
     assert sender.send_text.await_count == 1
 
     async with sessions() as session:
-        business = await session.get(Business, 1)
         appointment = await session.scalar(select(Appointment))
-        assert business.calendar_id is None
         assert appointment.status == "CONFIRMED"
         assert appointment.calendar_event_id == "google-event-123"
 

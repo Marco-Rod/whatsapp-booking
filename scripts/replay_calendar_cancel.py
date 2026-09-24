@@ -14,25 +14,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from googleapiclient.errors import HttpError
 from httpx import ASGITransport, AsyncClient
 
-from app.api.v1.appointments import get_calendar_service
-from app.core.config import settings
+from app.api.v1.appointments import get_calendar_resolver
 from app.core.database import Session, engine
-from app.integrations.google_calendar.factory import calendar_client_from_token
 from app.main import app
 from app.models import Appointment, Business, Customer
-from app.services.calendar import CalendarService
+from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
 
 APPOINTMENT_ID = 3
 
 
-class ObservedCalendar(CalendarService):
+class ObservedClient:
     def __init__(self, client):
-        super().__init__(client)
+        self.client = client
         self.calls = 0
 
-    async def sync_cancelled_appointment(self, **kwargs):
+    async def delete_event(self, *args, **kwargs):
         self.calls += 1
-        await super().sync_cancelled_appointment(**kwargs)
+        await self.client.delete_event(*args, **kwargs)
+
+
+class FixedResolver:
+    def __init__(self, resolved):
+        self.resolved = resolved
+
+    async def resolve(self, business_id):
+        return self.resolved
 
 
 async def run():
@@ -41,22 +47,35 @@ async def run():
         assert appointment is not None and appointment.status == "CONFIRMED"
         business = await session.get(Business, appointment.business_id)
         customer = await session.get(Customer, appointment.customer_id)
-        assert business.name == "Bella Studio" and business.calendar_id == "primary"
+        assert business.name == "Bella Studio"
         assert customer.phone == "+15555550199", "Expected the lifecycle replay test customer"
+        resolved = await CalendarClientResolver(session).resolve(
+            appointment.business_id
+        )
+        assert resolved is not None, "Business has no Google Calendar connection"
         event_id = appointment.calendar_event_id
         assert event_id
         original_times = (appointment.starts_at, appointment.ends_at)
 
-    google = calendar_client_from_token(settings.google_calendar_token_file)
+    google = resolved.client
+    observed = ObservedClient(google)
+    replay_resolver = FixedResolver(
+        ResolvedCalendar(
+            calendar_id=resolved.calendar_id,
+            client=observed,
+        )
+    )
 
     def read_event():
         with google._service_factory() as service:
-            return service.events().get(calendarId="primary", eventId=event_id).execute(num_retries=0)
+            return service.events().get(
+                calendarId=resolved.calendar_id,
+                eventId=event_id,
+            ).execute(num_retries=0)
 
     before = await asyncio.to_thread(read_event)
     assert before["id"] == event_id and before["status"] != "cancelled"
-    calendar = ObservedCalendar(google)
-    app.dependency_overrides[get_calendar_service] = lambda: calendar
+    app.dependency_overrides[get_calendar_resolver] = lambda: replay_resolver
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://local-e2e") as client:
             first = await client.post(f"/api/v1/appointments/{APPOINTMENT_ID}/cancel")
@@ -64,9 +83,9 @@ async def run():
             second = await client.post(f"/api/v1/appointments/{APPOINTMENT_ID}/cancel")
             second.raise_for_status()
             assert first.json() == second.json()
-        assert calendar.calls == 1
+        assert observed.calls == 1
     finally:
-        app.dependency_overrides.pop(get_calendar_service, None)
+        app.dependency_overrides.pop(get_calendar_resolver, None)
 
     async with Session() as session:
         appointment = await session.get(Appointment, APPOINTMENT_ID)

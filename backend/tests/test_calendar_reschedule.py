@@ -20,7 +20,6 @@ async def linked_booking(booking_client):
     client, sessions, _ = booking_client
     original = (await create(client)).json()
     async with sessions.begin() as session:
-        (await session.get(Business, 1)).calendar_id = "primary"
         (await session.get(Appointment, original["id"])).calendar_event_id = "existing-event"
     google = AsyncMock(spec=GoogleCalendarClient)
     google.create_event.return_value = "created-event"
@@ -28,7 +27,6 @@ async def linked_booking(booking_client):
     resolver.resolve.return_value = ResolvedCalendar(
         calendar_id="primary",
         client=google,
-        source="oauth",
     )
     active = {}
     active["resolver"] = resolver
@@ -104,13 +102,11 @@ async def test_rejected_reschedule_never_calls_google(linked_booking, kind, stat
         assert appointment.calendar_event_id == "existing-event"
 
 
-async def test_create_uses_oauth_when_business_has_no_legacy_calendar_id(
+async def test_create_uses_oauth_connection(
     booking_client,
 ):
     client, sessions, _ = booking_client
     async with sessions.begin() as session:
-        business = await session.get(Business, 1)
-        assert business.calendar_id is None
         session.add(
             GoogleCalendarConnection(
                 business_id=1,
@@ -126,7 +122,6 @@ async def test_create_uses_oauth_when_business_has_no_legacy_calendar_id(
     resolver.resolve.return_value = ResolvedCalendar(
         calendar_id="primary",
         client=google,
-        source="oauth",
     )
     app.dependency_overrides[get_calendar_resolver] = lambda: resolver
     try:

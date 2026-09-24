@@ -12,7 +12,8 @@ from app.api.v1.google_integrations import (
 
 app = FastAPI(title="Booking Core", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_allowed_origins,
-                   allow_methods=["GET"], allow_headers=["Accept", "Content-Type"])
+                   allow_methods=["GET", "POST", "DELETE"],
+                   allow_headers=["Accept", "Content-Type"])
 app.include_router(router, prefix="/api/v1")
 app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(whatsapp_router, prefix="/api/v1")
