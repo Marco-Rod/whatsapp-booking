@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from test_booking import booking_client  # noqa: F401
 
 from app.api.v1 import google_integrations
+from app.core.config import Settings
 from app.integrations.google_calendar.oauth import GoogleOAuthExchangeError
 from app.models import Appointment, GoogleCalendarConnection
 from app.security.credentials import CredentialCipher
@@ -101,8 +102,24 @@ def callback_dependencies(monkeypatch):
         "build_credential_cipher",
         lambda: cipher,
     )
+    monkeypatch.setattr(
+        google_integrations.settings,
+        "frontend_url",
+        "http://frontend.test",
+    )
 
     return state_manager, oauth, cipher
+
+
+def test_frontend_url_configuration(monkeypatch):
+    monkeypatch.setenv(
+        "FRONTEND_URL",
+        "https://dashboard.example",
+    )
+
+    config = Settings(_env_file=None)
+
+    assert config.frontend_url == "https://dashboard.example"
 
 
 async def add_google_connection(sessions):
@@ -356,11 +373,10 @@ async def test_google_callback_creates_encrypted_connection(
         },
     )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "connected",
-        "business_id": 1,
-    }
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://frontend.test/?google_calendar=connected"
+    )
 
     state_manager.verify.assert_called_once_with(
         "signed-state"
@@ -411,7 +427,7 @@ async def test_google_callback_updates_existing_connection(
         },
     )
 
-    assert first.status_code == 200
+    assert first.status_code == 303
 
     oauth.exchange_code.return_value = SimpleNamespace(
         refresh_token="new-refresh-token",
@@ -429,7 +445,7 @@ async def test_google_callback_updates_existing_connection(
         },
     )
 
-    assert second.status_code == 200
+    assert second.status_code == 303
 
     async with sessions() as session:
         count = await session.scalar(
@@ -526,10 +542,13 @@ async def test_google_callback_rejects_exchange_failure(
         },
     )
 
-    assert response.status_code == 400
-    assert response.json() == {
-        "detail": "Unable to complete Google OAuth"
-    }
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://frontend.test/?google_calendar=error"
+    )
+    assert "invalid-code" not in response.headers["location"]
+    assert "signed-state" not in response.headers["location"]
+    assert "Google rejected" not in response.headers["location"]
 
     cipher.encrypt.assert_not_called()
 
@@ -564,7 +583,7 @@ async def test_google_reconnect_without_refresh_token_preserves_ciphertext(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 303
     cipher.encrypt.assert_not_called()
     async with sessions() as session:
         connection = await session.scalar(
@@ -616,7 +635,7 @@ async def test_google_reconnect_replaces_refresh_token(
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 303
     async with sessions() as session:
         connection = await session.scalar(
             select(GoogleCalendarConnection)
@@ -650,12 +669,12 @@ async def test_first_google_connection_requires_refresh_token(
         },
     )
 
-    assert response.status_code == 400
-    assert response.json() == {
-        "detail": "Google did not provide a refresh token"
-    }
-    assert "first-code" not in response.text
-    assert "signed-state" not in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://frontend.test/?google_calendar=error"
+    )
+    assert "first-code" not in response.headers["location"]
+    assert "signed-state" not in response.headers["location"]
     cipher.encrypt.assert_not_called()
     async with sessions() as session:
         count = await session.scalar(

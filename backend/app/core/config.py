@@ -16,14 +16,11 @@ class Settings(BaseSettings):
     whatsapp_api_version: str = ""
     meta_app_secret: SecretStr = SecretStr("")
 
-    google_oauth_client_id: SecretStr | None = None
-    google_oauth_client_secret: SecretStr | None = None
-    google_oauth_redirect_uri: str = ""
     credential_encryption_key: SecretStr | None = None
-
     google_oauth_client_id: SecretStr | None = None
     google_oauth_client_secret: SecretStr | None = None
     google_oauth_redirect_uri: str | None = None
+    frontend_url: str = "http://localhost:5173"
 
     cors_allowed_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",

@@ -161,4 +161,9 @@ class OAuthStateManager:
     @staticmethod
     def _decode_bytes(value: str) -> bytes:
         padding = "=" * (-len(value) % 4)
-        return base64.urlsafe_b64decode(value + padding)
+        decoded = base64.urlsafe_b64decode(value + padding)
+
+        if OAuthStateManager._encode_bytes(decoded) != value:
+            raise OAuthStateError("Invalid OAuth state")
+
+        return decoded

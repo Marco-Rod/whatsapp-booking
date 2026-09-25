@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_session
 from app.integrations.google_calendar.oauth_factory import (
     build_google_oauth_service,
@@ -38,6 +39,14 @@ class GoogleIntegrationStatus(BaseModel):
 
 class GoogleDisconnectResult(BaseModel):
     connected: bool
+
+
+def oauth_result_redirect(result: str) -> RedirectResponse:
+    frontend_url = settings.frontend_url.rstrip("/")
+    return RedirectResponse(
+        url=f"{frontend_url}/?google_calendar={result}",
+        status_code=303,
+    )
 
 
 @router.get(
@@ -176,10 +185,7 @@ async def google_calendar_callback(
             code_verifier=oauth_state.code_verifier,
         )
     except GoogleOAuthExchangeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Unable to complete Google OAuth",
-        ) from exc
+        return oauth_result_redirect("error")
 
     connection = await session.scalar(
         select(GoogleCalendarConnection).where(
@@ -190,10 +196,7 @@ async def google_calendar_callback(
 
     if connection is None:
         if not tokens.refresh_token:
-            raise HTTPException(
-                status_code=400,
-                detail="Google did not provide a refresh token",
-            )
+            return oauth_result_redirect("error")
 
         cipher = build_credential_cipher()
         connection = GoogleCalendarConnection(
@@ -218,7 +221,4 @@ async def google_calendar_callback(
 
     await session.commit()
 
-    return {
-        "status": "connected",
-        "business_id": business.id,
-    }
+    return oauth_result_redirect("connected")
