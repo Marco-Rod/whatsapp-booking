@@ -12,11 +12,26 @@ from app.services.reminders import ReminderService
 NOW = datetime(2026, 9, 17, 22, tzinfo=timezone.utc)
 
 
-async def add_appointment(sessions, *, start=None, status="CONFIRMED"):
+async def add_appointment(
+    sessions,
+    *,
+    start=None,
+    status="CONFIRMED",
+    booked_at=None,
+):
     start = start or NOW + timedelta(hours=24)
     async with sessions.begin() as session:
-        appointment = Appointment(business_id=1, service_id=1, starts_at=start,
-                                  ends_at=start + timedelta(hours=1), status=status)
+        values = {}
+        if booked_at is not None:
+            values["created_at"] = booked_at
+        appointment = Appointment(
+            business_id=1,
+            service_id=1,
+            starts_at=start,
+            ends_at=start + timedelta(hours=1),
+            status=status,
+            **values,
+        )
         session.add(appointment)
         await session.flush()
         return appointment.id
@@ -38,6 +53,57 @@ async def test_confirmed_due_reminder_is_created_in_utc(booking_client):
     assert due[0].sent_at is None
 
 
+@pytest.mark.parametrize(
+    "lead_time",
+    [timedelta(days=10), timedelta(hours=25)],
+    ids=["ten-days-before", "twenty-five-hours-before"],
+)
+async def test_reminder_is_not_due_before_target_time(
+    booking_client,
+    lead_time,
+):
+    _, sessions, _ = booking_client
+    await add_appointment(
+        sessions,
+        start=NOW + lead_time,
+        booked_at=NOW,
+    )
+
+    assert await find(sessions) == []
+
+
+async def test_late_booking_is_not_due_immediately(booking_client):
+    """Regression: a 17:27 booking for tomorrow 09:00 is not due at 17:30."""
+    _, sessions, _ = booking_client
+    cron_time = datetime(2026, 9, 17, 23, 30, tzinfo=timezone.utc)
+    await add_appointment(
+        sessions,
+        booked_at=cron_time - timedelta(minutes=3),
+        start=datetime(2026, 9, 18, 15, 0, tzinfo=timezone.utc),
+    )
+
+    assert await find(sessions, cron_time) == []
+
+
+@pytest.mark.parametrize(
+    "lead_time",
+    [timedelta(hours=2), timedelta(minutes=20)],
+    ids=["two-hours-before", "twenty-minutes-before"],
+)
+async def test_very_late_booking_has_no_immediate_reminder(
+    booking_client,
+    lead_time,
+):
+    _, sessions, _ = booking_client
+    await add_appointment(
+        sessions,
+        booked_at=NOW - timedelta(minutes=3),
+        start=NOW + lead_time,
+    )
+
+    assert await find(sessions) == []
+
+
 @pytest.mark.parametrize("status", ["CANCELLED", "PENDING", "COMPLETED"])
 async def test_non_confirmed_is_ignored(booking_client, status):
     _, sessions, _ = booking_client
@@ -52,11 +118,42 @@ async def test_outside_window_is_ignored(booking_client, offset):
     assert await find(sessions) == []
 
 
-async def test_delayed_execution_recovers_pending_reminder(booking_client):
+@pytest.mark.parametrize(
+    "delay",
+    [
+        timedelta(0),
+        timedelta(minutes=5),
+        timedelta(minutes=9, seconds=59),
+    ],
+    ids=["exact-target", "five-minutes", "nine-minutes-fifty-nine"],
+)
+async def test_reminder_is_created_within_delivery_window(
+    booking_client,
+    delay,
+):
     _, sessions, _ = booking_client
     await add_appointment(sessions)
-    due = await find(sessions, NOW + timedelta(hours=2, minutes=7))
+    due = await find(sessions, NOW + delay)
     assert len(due) == 1 and due[0].scheduled_for == NOW
+
+
+async def test_new_reminder_is_not_created_at_window_end(booking_client):
+    _, sessions, _ = booking_client
+    await add_appointment(sessions)
+
+    assert await find(sessions, NOW + timedelta(minutes=10)) == []
+
+
+async def test_pending_reminder_remains_due_after_delivery_window(
+    booking_client,
+):
+    _, sessions, _ = booking_client
+    await add_appointment(sessions)
+    first = await find(sessions)
+
+    retried = await find(sessions, NOW + timedelta(minutes=11))
+
+    assert [reminder.id for reminder in retried] == [first[0].id]
 
 
 async def test_repeated_runs_reuse_record_and_sent_is_excluded(booking_client):

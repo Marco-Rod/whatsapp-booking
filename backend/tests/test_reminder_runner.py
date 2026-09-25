@@ -66,7 +66,7 @@ async def test_delayed_cycle_continues_after_individual_failure(reminder_booking
             await super().send(**kwargs)
 
     sender = Sender()
-    late = NOW + timedelta(minutes=10)
+    late = NOW + timedelta(minutes=5)
     result = await ReminderProcessor(sessions, sender).process_once(late)
     assert result == ReminderProcessingResult(sent=1, failed=1)
     assert sender.attempts == 2 and len(sender.messages) == 1

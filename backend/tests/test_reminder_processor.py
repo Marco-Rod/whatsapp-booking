@@ -91,8 +91,9 @@ async def test_send_failure_leaves_pending_and_retry_can_succeed(reminder_bookin
     record = await reminder(sessions)
     assert record.sent_at is None and record.claim_token is None
     sender.error = None
-    assert await processor.process_due_reminders(NOW + timedelta(minutes=1)) == 1
-    assert (await reminder(sessions)).sent_at == NOW + timedelta(minutes=1)
+    retry_time = NOW + timedelta(minutes=11)
+    assert await processor.process_due_reminders(retry_time) == 1
+    assert (await reminder(sessions)).sent_at == retry_time
 
 
 @pytest.mark.parametrize("change", ["cancel", "reschedule", "missing_customer"])
