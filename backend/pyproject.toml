@@ -10,6 +10,7 @@ dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "sqlalchemy>=2.0,<2.1",
 
 [project.scripts]
 process-reminders = "app.commands.process_reminders:main"
+bootstrap-business-admin = "app.commands.bootstrap_business_admin:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "httpx>=0.27,<1", "aiosqlite>=0.20,<1"]

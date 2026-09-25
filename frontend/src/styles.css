@@ -775,6 +775,103 @@ h1>span {
 .mobile-label {
   display:none
 }
+.google-sign-in-page {
+  min-height:100vh;
+  max-width:none;
+  padding:48px 20px;
+  display:grid;
+  place-items:center;
+  background:linear-gradient(145deg,#f6f7f3 20%,#eaf0e1)
+}
+.google-sign-in-card {
+  width:min(100%,430px);
+  padding:42px 38px;
+  text-align:center;
+  background:#fff;
+  border:1px solid #dfe6da;
+  border-radius:18px;
+  box-shadow:0 20px 60px #263d2712
+}
+.google-sign-in-brand {
+  justify-content:center;
+  margin-bottom:30px
+}
+.google-sign-in-card h1 {
+  font-size:30px
+}
+.google-sign-in-card>p {
+  margin:12px auto 27px;
+  max-width:310px;
+  color:#778174;
+  line-height:1.7
+}
+.google-sign-in-control {
+  min-height:58px;
+  display:grid;
+  justify-items:center;
+  align-content:center
+}
+.google-sign-in-control>p {
+  color:#8b6757;
+  font-size:12px
+}
+.identity-received {
+  margin-top:22px;
+  color:#47763d;
+  font-size:13px;
+  font-weight:600
+}
+.activation-link {
+  display:block;
+  margin:16px auto 0
+}
+.activation-form {
+  display:grid;
+  gap:12px;
+  text-align:left
+}
+.activation-form label {
+  color:#4d5e4b;
+  font-size:12px;
+  font-weight:600
+}
+.activation-form input {
+  width:100%;
+  padding:11px 12px;
+  border:1px solid #d9e1d5;
+  border-radius:8px;
+  color:#25372e;
+  background:#fff
+}
+.activation-form .google-sign-in-control {
+  margin-top:4px
+}
+.activation-form .text-button {
+  justify-self:center
+}
+.auth-message {
+  margin-top:20px;
+  color:#6c765f;
+  font-size:12px;
+  line-height:1.6
+}
+.onboarding-result {
+  display:grid;
+  gap:8px;
+  padding:16px;
+  color:#47763d;
+  background:#eef5e9;
+  border:1px solid #d9e8ce;
+  border-radius:10px
+}
+.onboarding-result span {
+  color:#687864;
+  font-size:11px
+}
+.onboarding-result .text-button {
+  justify-self:center;
+  margin-top:4px
+}
 @keyframes shimmer {
   to {
   background-position:-200% 0
@@ -1027,6 +1124,15 @@ h1 {
 }
 .confirmation-actions button {
   min-width:0
+}
+.google-sign-in-page {
+  padding:24px 16px
+}
+.google-sign-in-card {
+  padding:34px 20px
+}
+.google-sign-in-card h1 {
+  font-size:27px
 }
 
 }

@@ -1,6 +1,6 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -20,7 +20,20 @@ class Settings(BaseSettings):
     google_oauth_client_id: SecretStr | None = None
     google_oauth_client_secret: SecretStr | None = None
     google_oauth_redirect_uri: str | None = None
+    google_identity_client_id: str | None = None
     frontend_url: str = "http://localhost:5173"
+
+    admin_session_secret: SecretStr | None = None
+    admin_session_max_age_seconds: int = Field(
+        default=7 * 24 * 60 * 60,
+        gt=0,
+    )
+    admin_session_cookie_secure: bool = False
+    admin_session_cookie_samesite: Literal[
+        "lax",
+        "strict",
+        "none",
+    ] = "lax"
 
     cors_allowed_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",
@@ -37,6 +50,23 @@ class Settings(BaseSettings):
                 if origin.strip()
             ]
         return value
+
+    @model_validator(mode="after")
+    def validate_admin_session_cookie(self):
+        if "*" in self.cors_allowed_origins:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must list explicit origins "
+                "when credentials are enabled"
+            )
+        if (
+            self.admin_session_cookie_samesite == "none"
+            and not self.admin_session_cookie_secure
+        ):
+            raise ValueError(
+                "ADMIN_SESSION_COOKIE_SAMESITE=none requires "
+                "ADMIN_SESSION_COOKIE_SECURE=true"
+            )
+        return self
 
 
 settings = Settings()

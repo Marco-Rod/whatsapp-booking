@@ -4,5 +4,5 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests',
   workers: 1,
-  use: { baseURL: process.env.DASHBOARD_UI_URL || 'http://127.0.0.1:5173', browserName: 'chromium' },
+  use: { baseURL: process.env.DASHBOARD_UI_URL || 'http://localhost:5173', browserName: 'chromium' },
 })

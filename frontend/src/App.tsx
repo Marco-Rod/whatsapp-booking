@@ -1,2 +1,12 @@
 import { DashboardPage } from './pages/DashboardPage'
-export default function App() { return <DashboardPage/> }
+import { GoogleSignInDemoPage } from './pages/GoogleSignInDemoPage'
+
+export default function App() {
+  if (window.location.pathname === '/google-signin-demo/unconfigured') {
+    return <GoogleSignInDemoPage clientId=""/>
+  }
+  if (window.location.pathname === '/google-signin-demo') {
+    return <GoogleSignInDemoPage/>
+  }
+  return <DashboardPage/>
+}

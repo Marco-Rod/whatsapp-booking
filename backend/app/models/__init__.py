@@ -20,11 +20,63 @@ class Business(Timestamps, Base):
     name: Mapped[str] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(100), default="America/Mexico_City")
     phone_number: Mapped[str | None] = mapped_column(String(30))
+    admin_token_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     customers: Mapped[list["Customer"]] = relationship(back_populates="business")
+    users: Mapped[list["BusinessUser"]] = relationship(
+        back_populates="business",
+        cascade="all, delete-orphan",
+    )
     google_calendar_connection: Mapped["GoogleCalendarConnection | None"] = relationship(
         back_populates="business",
         uselist=False,
         cascade="all, delete-orphan",
+    )
+
+
+class BusinessUser(Timestamps, Base):
+    __tablename__ = "business_users"
+    __table_args__ = (
+        UniqueConstraint(
+            "auth_provider",
+            "provider_subject",
+            name="uq_business_user_provider_subject",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(
+        String(320),
+        nullable=False,
+    )
+    display_name: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+    auth_provider: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+    provider_subject: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    business: Mapped["Business"] = relationship(
+        back_populates="users",
     )
 
 

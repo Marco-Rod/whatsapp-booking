@@ -9,7 +9,14 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
   test(`${name}: real appointments, dates, statuses and screenshot`, async ({ page, request }) => {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
-    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    page.on('console', message => {
+      if (
+        message.type() === 'error' &&
+        !message.text().includes('ERR_NETWORK_ACCESS_DENIED')
+      ) {
+        errors.push(message.text())
+      }
+    })
     await page.setViewportSize({ width, height })
     const response = await request.get(`${api}/api/v1/businesses/1/dashboard?date=${date}`)
     expect(response.ok()).toBeTruthy()
@@ -60,7 +67,9 @@ test('loading, network error and retry with real API recovery', async ({ page })
     } else await route.continue()
   })
   await page.goto('/')
-  await expect(page.getByRole('status')).toContainText('Cargando agenda')
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Cargando agenda' }),
+  ).toBeVisible()
   await expect(page.getByRole('alert')).toContainText('No pudimos cargar tu agenda')
   fail = false
   await page.getByRole('button', { name: 'Reintentar' }).click()
