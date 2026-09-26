@@ -1,9 +1,27 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import type { DashboardResponse } from '../src/types/dashboard'
 
 const api = process.env.DASHBOARD_API_URL || 'http://localhost:8000'
 const date = process.env.DASHBOARD_TEST_DATE || '2026-09-17'
 const cancelledDate = process.env.DASHBOARD_CANCELLED_DATE || '2026-09-18'
+
+async function mockGoogleCalendarIntegration(page: Page) {
+  await page.route(`${api}/api/v1/admin/integrations/google`, route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: {
+        'access-control-allow-origin': 'http://localhost:5173',
+        'access-control-allow-credentials': 'true',
+      },
+      body: JSON.stringify({
+        connected: false,
+        calendar_id: null,
+        connected_at: null,
+      }),
+    }),
+  )
+}
 
 for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
   test(`${name}: real appointments, dates, statuses and screenshot`, async ({ page, request }) => {
@@ -18,6 +36,7 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
       }
     })
     await page.setViewportSize({ width, height })
+    await mockGoogleCalendarIntegration(page)
     const response = await request.get(`${api}/api/v1/businesses/1/dashboard?date=${date}`)
     expect(response.ok()).toBeTruthy()
     const data: DashboardResponse = await response.json()
@@ -60,6 +79,7 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
 
 test('loading, network error and retry with real API recovery', async ({ page }) => {
   let fail = true
+  await mockGoogleCalendarIntegration(page)
   await page.route('**/dashboard?*', async route => {
     if (fail) {
       await new Promise(resolve => setTimeout(resolve, 500))

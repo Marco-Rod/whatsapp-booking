@@ -14,6 +14,7 @@ class OAuthStateError(RuntimeError):
 class OAuthState:
     business_id: int
     code_verifier: str
+    return_to: str
 
 
 class OAuthStateManager:
@@ -39,6 +40,7 @@ class OAuthStateManager:
         *,
         business_id: int,
         code_verifier: str,
+        return_to: str = "dashboard",
     ) -> str:
         if business_id <= 0:
             raise OAuthStateError(
@@ -50,9 +52,13 @@ class OAuthStateManager:
                 "OAuth code verifier is required"
             )
 
+        if return_to not in {"dashboard", "onboarding"}:
+            raise OAuthStateError("Invalid OAuth return target")
+
         payload = {
             "business_id": business_id,
             "code_verifier": code_verifier,
+            "return_to": return_to,
             "issued_at": int(time.time()),
         }
 
@@ -99,6 +105,7 @@ class OAuthStateManager:
 
             business_id = int(payload["business_id"])
             code_verifier = str(payload["code_verifier"])
+            return_to = str(payload.get("return_to", "dashboard"))
             issued_at = int(payload["issued_at"])
 
         except OAuthStateError:
@@ -123,6 +130,9 @@ class OAuthStateManager:
                 "Invalid OAuth state"
             )
 
+        if return_to not in {"dashboard", "onboarding"}:
+            raise OAuthStateError("Invalid OAuth state")
+
         now = int(time.time())
 
         if issued_at > now + 60:
@@ -138,6 +148,7 @@ class OAuthStateManager:
         return OAuthState(
             business_id=business_id,
             code_verifier=code_verifier,
+            return_to=return_to,
         )
 
     @staticmethod

@@ -3,15 +3,18 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import pytest_asyncio
 from cryptography.fernet import Fernet
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from test_booking import booking_client  # noqa: F401
 
 from app.api.v1 import google_integrations
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.integrations.google_calendar.oauth import GoogleOAuthExchangeError
-from app.models import Appointment, GoogleCalendarConnection
+from app.models import Appointment, Business, GoogleCalendarConnection
+from app.security.admin_tokens import hash_admin_token
 from app.security.credentials import CredentialCipher
 from app.security.oauth_state import OAuthStateError
 
@@ -37,6 +40,181 @@ async def test_google_disconnect_cors_preflight_allows_delete(
 
 
 STATUS_URL = "/api/v1/businesses/1/integrations/google"
+ADMIN_STATUS_URL = "/api/v1/admin/integrations/google"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def authenticated_google_integration_client(booking_client):
+    client, sessions, _ = booking_client
+    settings.admin_session_secret = SecretStr(
+        "test-google-integrations-session-secret"
+    )
+    settings.admin_session_cookie_secure = False
+    settings.admin_session_cookie_samesite = "lax"
+    async with sessions.begin() as session:
+        business = await session.get(Business, 1)
+        business.admin_token_hash = hash_admin_token(
+            "google-integrations-admin-token"
+        )
+
+    response = await client.post(
+        "/api/v1/admin/session",
+        headers={
+            "Authorization": "Bearer google-integrations-admin-token"
+        },
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", STATUS_URL),
+        ("DELETE", STATUS_URL),
+        ("GET", f"{STATUS_URL}/connect"),
+    ],
+)
+async def test_google_business_endpoints_require_admin_session(
+    booking_client,
+    method,
+    path,
+):
+    client, _, _ = booking_client
+    client.cookies.clear()
+
+    response = await client.request(method, path, follow_redirects=False)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Invalid business admin credentials"
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/v1/businesses/2/integrations/google"),
+        ("DELETE", "/api/v1/businesses/2/integrations/google"),
+        ("GET", "/api/v1/businesses/2/integrations/google/connect"),
+    ],
+)
+async def test_google_business_endpoints_deny_other_business_session(
+    booking_client,
+    method,
+    path,
+):
+    client, _, _ = booking_client
+
+    response = await client.request(method, path, follow_redirects=False)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Business access denied"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", ADMIN_STATUS_URL),
+        ("DELETE", ADMIN_STATUS_URL),
+        ("GET", f"{ADMIN_STATUS_URL}/connect"),
+    ],
+)
+async def test_admin_google_endpoints_require_admin_session(
+    booking_client,
+    method,
+    path,
+):
+    client, _, _ = booking_client
+    client.cookies.clear()
+
+    response = await client.request(method, path, follow_redirects=False)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Invalid business admin credentials"
+    }
+
+
+async def test_admin_google_status_uses_session_business(booking_client):
+    client, _, _ = booking_client
+
+    response = await client.get(ADMIN_STATUS_URL)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connected": False,
+        "calendar_id": None,
+        "connected_at": None,
+    }
+
+
+async def test_admin_google_disconnect_uses_session_business(booking_client):
+    client, sessions, _ = booking_client
+    await add_google_connection(sessions)
+
+    response = await client.delete(ADMIN_STATUS_URL)
+
+    assert response.status_code == 200
+    assert response.json() == {"connected": False}
+    async with sessions() as session:
+        assert await session.scalar(select(GoogleCalendarConnection)) is None
+
+
+async def test_admin_google_connect_uses_session_business(
+    booking_client,
+    oauth_dependencies,
+):
+    client, _, _ = booking_client
+    state_manager, _ = oauth_dependencies
+
+    response = await client.get(
+        f"{ADMIN_STATUS_URL}/connect",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    state_manager.create.assert_called_once_with(
+        business_id=1,
+        code_verifier="test-code-verifier",
+        return_to="dashboard",
+    )
+
+
+async def test_admin_google_connect_supports_onboarding_return_target(
+    booking_client,
+    oauth_dependencies,
+):
+    client, _, _ = booking_client
+    state_manager, _ = oauth_dependencies
+
+    response = await client.get(
+        f"{ADMIN_STATUS_URL}/connect?return_to=onboarding",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    state_manager.create.assert_called_once_with(
+        business_id=1,
+        code_verifier="test-code-verifier",
+        return_to="onboarding",
+    )
+
+
+async def test_admin_google_connect_rejects_unknown_return_target(
+    booking_client,
+    oauth_dependencies,
+):
+    client, _, _ = booking_client
+    state_manager, oauth = oauth_dependencies
+
+    response = await client.get(
+        f"{ADMIN_STATUS_URL}/connect?return_to=https://evil.example",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    state_manager.create.assert_not_called()
+    oauth.build_authorization_url.assert_not_called()
 
 
 @pytest.fixture
@@ -74,6 +252,7 @@ def callback_dependencies(monkeypatch):
     state_manager.verify.return_value = SimpleNamespace(
         business_id=1,
         code_verifier="test-code-verifier",
+        return_to="dashboard",
     )
 
     oauth = Mock()
@@ -143,9 +322,9 @@ async def test_google_status_returns_404_for_unknown_business(booking_client):
         "/api/v1/businesses/999/integrations/google"
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 403
     assert response.json() == {
-        "detail": "Business not found",
+        "detail": "Business access denied",
     }
 
 
@@ -202,9 +381,9 @@ async def test_google_disconnect_returns_404_for_unknown_business(
         "/api/v1/businesses/999/integrations/google"
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 403
     assert response.json() == {
-        "detail": "Business not found",
+        "detail": "Business access denied",
     }
 
 
@@ -329,6 +508,7 @@ async def test_google_connect_redirects_to_google(
     state_manager.create.assert_called_once_with(
         business_id=1,
         code_verifier="test-code-verifier",
+        return_to="dashboard",
     )
 
     oauth.build_authorization_url.assert_called_once_with(
@@ -349,9 +529,9 @@ async def test_google_connect_returns_404_for_unknown_business(
         follow_redirects=False,
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 403
     assert response.json() == {
-        "detail": "Business not found",
+        "detail": "Business access denied",
     }
 
     state_manager.create.assert_not_called()
@@ -410,6 +590,57 @@ async def test_google_callback_creates_encrypted_connection(
         assert connection.scopes == [
             "https://www.googleapis.com/auth/calendar.events"
         ]
+
+
+async def test_google_callback_returns_to_onboarding_from_signed_state(
+    booking_client,
+    callback_dependencies,
+):
+    client, _, _ = booking_client
+    state_manager, _, _ = callback_dependencies
+    state_manager.verify.return_value = SimpleNamespace(
+        business_id=1,
+        code_verifier="test-code-verifier",
+        return_to="onboarding",
+    )
+
+    response = await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "google-auth-code", "state": "signed-state"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://frontend.test/onboarding?step=calendar"
+        "&google_calendar=connected"
+    )
+
+
+async def test_google_callback_error_returns_to_onboarding_from_signed_state(
+    booking_client,
+    callback_dependencies,
+):
+    client, _, _ = booking_client
+    state_manager, oauth, _ = callback_dependencies
+    state_manager.verify.return_value = SimpleNamespace(
+        business_id=1,
+        code_verifier="test-code-verifier",
+        return_to="onboarding",
+    )
+    oauth.exchange_code.side_effect = GoogleOAuthExchangeError(
+        "Google rejected authorization code"
+    )
+
+    response = await client.get(
+        "/api/v1/integrations/google/callback",
+        params={"code": "invalid-code", "state": "signed-state"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "http://frontend.test/onboarding?step=calendar"
+        "&google_calendar=error"
+    )
 
 
 async def test_google_callback_updates_existing_connection(

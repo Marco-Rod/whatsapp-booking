@@ -58,7 +58,7 @@ export function DashboardPage() {
           {state.data.appointments.length === 0 ? <div className="state-panel empty-panel"><span className="state-icon"><Icon name="calendar" size={30}/></span><h3>No tienes citas para este día</h3><p>Cuando haya una reserva, la verás aquí.<br/>También puedes consultar otra fecha.</p></div> : <><div className="agenda-columns" aria-hidden="true"><span>HORARIO</span><span>SERVICIO</span><span>CLIENTE</span><span>ESTADO</span></div><ul className="appointment-list">{state.data.appointments.map(a => <AppointmentCard key={a.id} appointment={a} timezone={state.data.timezone}/>)}</ul></>}
         </section>
       </>}
-      <GoogleCalendarIntegrationCard businessId={businessId}/>
+      <GoogleCalendarIntegrationCard/>
       <footer className="page-footer"><span><Icon name="clock" size={14}/> Hora local del negocio · {timezone.replaceAll('_', ' ')}</span><span>Menos pendientes. Más tiempo para tus clientes.</span></footer>
     </main><div className="bottom-brand">Hecho para el ritmo de tu negocio <span>✧</span></div>
   </>

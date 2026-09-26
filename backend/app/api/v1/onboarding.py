@@ -6,10 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.schemas.onboarding import (
+    BusinessConfigurationResponse,
     BusinessConfigurationRequest,
+    BusinessHoursConfigurationListResponse,
     BusinessHoursConfigurationRequest,
     OnboardingStatus,
     ServicesConfigurationRequest,
+    ServicesConfigurationResponse,
 )
 from app.security.admin_sessions import (
     AdminSessionError,
@@ -72,6 +75,16 @@ async def get_onboarding_status(
     return await OnboardingService(session).get_status(business_id)
 
 
+@router.get("/business", response_model=BusinessConfigurationResponse)
+async def get_onboarding_business_configuration(
+    business_id: Annotated[int, Depends(get_business_admin_id)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> BusinessConfigurationResponse:
+    return await OnboardingService(
+        session
+    ).get_business_configuration(business_id)
+
+
 @router.put("/business", response_model=OnboardingStatus)
 async def configure_onboarding_business(
     request: BusinessConfigurationRequest,
@@ -90,6 +103,16 @@ async def configure_onboarding_business(
     return await service.get_status(business_id)
 
 
+@router.get("/services", response_model=ServicesConfigurationResponse)
+async def get_onboarding_services_configuration(
+    business_id: Annotated[int, Depends(get_business_admin_id)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ServicesConfigurationResponse:
+    return await OnboardingService(
+        session
+    ).get_services_configuration(business_id)
+
+
 @router.put("/services", response_model=OnboardingStatus)
 async def configure_onboarding_services(
     request: ServicesConfigurationRequest,
@@ -105,6 +128,19 @@ async def configure_onboarding_services(
     except OnboardingConfigurationError as exc:
         raise _invalid_configuration(exc) from exc
     return await service.get_status(business_id)
+
+
+@router.get(
+    "/hours",
+    response_model=BusinessHoursConfigurationListResponse,
+)
+async def get_onboarding_business_hours_configuration(
+    business_id: Annotated[int, Depends(get_business_admin_id)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> BusinessHoursConfigurationListResponse:
+    return await OnboardingService(
+        session
+    ).get_business_hours_configuration(business_id)
 
 
 @router.put("/hours", response_model=OnboardingStatus)

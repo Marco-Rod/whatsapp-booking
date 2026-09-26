@@ -12,7 +12,7 @@ type IntegrationState =
   | { kind: 'error' }
   | { kind: 'ready'; integration: GoogleCalendarIntegration }
 
-export function GoogleCalendarIntegrationCard({ businessId }: { businessId: number }) {
+export function GoogleCalendarIntegrationCard() {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<IntegrationState>({ kind: 'loading' })
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
@@ -23,7 +23,7 @@ export function GoogleCalendarIntegrationCard({ businessId }: { businessId: numb
     const controller = new AbortController()
     setState({ kind: 'loading' })
 
-    getGoogleCalendarIntegration(businessId, controller.signal)
+    getGoogleCalendarIntegration(controller.signal)
       .then(integration => {
         if (!controller.signal.aborted) {
           setState({ kind: 'ready', integration })
@@ -34,14 +34,14 @@ export function GoogleCalendarIntegrationCard({ businessId }: { businessId: numb
       })
 
     return () => controller.abort()
-  }, [businessId, attempt])
+  }, [attempt])
 
   async function handleDisconnect() {
     setDisconnecting(true)
     setDisconnectError(false)
 
     try {
-      await disconnectGoogleCalendar(businessId)
+      await disconnectGoogleCalendar()
       setState({
         kind: 'ready',
         integration: {
@@ -93,7 +93,7 @@ export function GoogleCalendarIntegrationCard({ businessId }: { businessId: numb
             <>
               <p>Conecta tu calendario para agregar automáticamente las nuevas citas que recibas por WhatsApp.</p>
               <span className="connection-status disconnected"><span /> No conectado</span>
-              <button className="integration-primary-action" onClick={() => connectGoogleCalendar(businessId)}>
+              <button className="integration-primary-action" onClick={() => connectGoogleCalendar()}>
                 Conectar Google Calendar
               </button>
             </>

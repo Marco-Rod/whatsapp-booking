@@ -12,10 +12,14 @@ from app.models import (
     Service,
 )
 from app.schemas.onboarding import (
+    BusinessConfigurationResponse,
     BusinessHoursConfiguration,
+    BusinessHoursConfigurationListResponse,
+    BusinessHoursConfigurationResponse,
     OnboardingStatus,
     OnboardingSteps,
     ServiceConfiguration,
+    ServicesConfigurationResponse,
 )
 
 
@@ -57,6 +61,94 @@ class OnboardingService:
             )
 
         return await self._status_for(business)
+
+    async def get_business_configuration(
+        self,
+        business_id: int,
+    ) -> BusinessConfigurationResponse:
+        business = await self.session.get(Business, business_id)
+
+        if business is None:
+            raise OnboardingBusinessNotFoundError(
+                "Business not found"
+            )
+
+        return BusinessConfigurationResponse(
+            name=business.name,
+            timezone=business.timezone,
+        )
+
+    async def get_services_configuration(
+        self,
+        business_id: int,
+    ) -> ServicesConfigurationResponse:
+        business = await self.session.get(Business, business_id)
+
+        if business is None:
+            raise OnboardingBusinessNotFoundError(
+                "Business not found"
+            )
+
+        services = await self.session.scalars(
+            select(Service)
+            .where(
+                Service.business_id == business_id,
+                Service.is_active.is_(True),
+            )
+            .order_by(Service.id)
+        )
+
+        return ServicesConfigurationResponse(
+            services=[
+                ServiceConfiguration(
+                    name=service.name,
+                    duration_minutes=service.duration_minutes,
+                )
+                for service in services
+            ]
+        )
+
+    async def get_business_hours_configuration(
+        self,
+        business_id: int,
+    ) -> BusinessHoursConfigurationListResponse:
+        business = await self.session.get(Business, business_id)
+
+        if business is None:
+            raise OnboardingBusinessNotFoundError(
+                "Business not found"
+            )
+
+        configured_hours = {
+            row.weekday: row
+            for row in await self.session.scalars(
+                select(BusinessHours).where(
+                    BusinessHours.business_id == business_id
+                )
+            )
+        }
+        hours = []
+        for weekday in range(7):
+            row = configured_hours.get(weekday)
+            is_open = row is not None and not row.is_closed
+            hours.append(
+                BusinessHoursConfigurationResponse(
+                    day_of_week=weekday,
+                    is_open=is_open,
+                    open_time=(
+                        row.start_time.strftime("%H:%M")
+                        if is_open and row.start_time is not None
+                        else None
+                    ),
+                    close_time=(
+                        row.end_time.strftime("%H:%M")
+                        if is_open and row.end_time is not None
+                        else None
+                    ),
+                )
+            )
+
+        return BusinessHoursConfigurationListResponse(hours=hours)
 
     async def complete_onboarding(
         self,

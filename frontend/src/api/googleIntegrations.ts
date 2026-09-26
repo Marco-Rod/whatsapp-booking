@@ -2,6 +2,7 @@ import type {
   GoogleCalendarDisconnectResult,
   GoogleCalendarIntegration,
 } from '../types/googleIntegration'
+import { AdminAuthError } from './adminAuth'
 
 function getApiBaseUrl(): string {
   const base = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '')
@@ -13,19 +14,20 @@ function getApiBaseUrl(): string {
   return base
 }
 
-function getGoogleIntegrationUrl(businessId: number): string {
-  return `${getApiBaseUrl()}/api/v1/businesses/${businessId}/integrations/google`
+function getGoogleIntegrationUrl(): string {
+  return `${getApiBaseUrl()}/api/v1/admin/integrations/google`
 }
 
 export async function getGoogleCalendarIntegration(
-  businessId: number,
   signal?: AbortSignal,
 ): Promise<GoogleCalendarIntegration> {
-  const response = await fetch(getGoogleIntegrationUrl(businessId), {
+  const response = await fetch(getGoogleIntegrationUrl(), {
+    credentials: 'include',
     signal,
   })
 
   if (!response.ok) {
+    if (response.status === 401) throw new AdminAuthError(response.status)
     throw new Error(
       response.status === 404
         ? 'No encontramos este negocio.'
@@ -36,24 +38,29 @@ export async function getGoogleCalendarIntegration(
   return response.json() as Promise<GoogleCalendarIntegration>
 }
 
-export function getGoogleCalendarConnectUrl(businessId: number): string {
-  return `${getGoogleIntegrationUrl(businessId)}/connect`
+export function getGoogleCalendarConnectUrl(
+  returnTo: 'dashboard' | 'onboarding' = 'dashboard',
+): string {
+  return `${getGoogleIntegrationUrl()}/connect?return_to=${returnTo}`
 }
 
-export function connectGoogleCalendar(businessId: number): void {
-  window.location.href = getGoogleCalendarConnectUrl(businessId)
+export function connectGoogleCalendar(
+  returnTo: 'dashboard' | 'onboarding' = 'dashboard',
+): void {
+  window.location.href = getGoogleCalendarConnectUrl(returnTo)
 }
 
 export async function disconnectGoogleCalendar(
-  businessId: number,
   signal?: AbortSignal,
 ): Promise<GoogleCalendarDisconnectResult> {
-  const response = await fetch(getGoogleIntegrationUrl(businessId), {
+  const response = await fetch(getGoogleIntegrationUrl(), {
     method: 'DELETE',
+    credentials: 'include',
     signal,
   })
 
   if (!response.ok) {
+    if (response.status === 401) throw new AdminAuthError(response.status)
     throw new Error(
       response.status === 404
         ? 'No encontramos este negocio.'

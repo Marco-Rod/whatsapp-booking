@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,14 +15,24 @@ from app.integrations.google_calendar.oauth_factory import (
 from app.integrations.google_calendar.oauth import GoogleOAuthExchangeError
 from app.models import Business, GoogleCalendarConnection
 from app.security.factory import (
+    build_admin_session_manager,
     build_credential_cipher,
     build_oauth_state_manager,
+)
+from app.security.admin_sessions import (
+    AdminSessionError,
+    authenticate_admin_session,
 )
 from app.security.oauth_state import OAuthStateError
 
 
 router = APIRouter(
     prefix="/businesses/{business_id}/integrations/google",
+    tags=["google-integrations"],
+)
+
+admin_router = APIRouter(
+    prefix="/admin/integrations/google",
     tags=["google-integrations"],
 )
 
@@ -41,11 +52,109 @@ class GoogleDisconnectResult(BaseModel):
     connected: bool
 
 
-def oauth_result_redirect(result: str) -> RedirectResponse:
+async def get_admin_business_id(
+    session: AsyncSession = Depends(get_session),
+    admin_session: str | None = Cookie(default=None),
+) -> int:
+    if admin_session is None:
+        raise unauthorized_admin()
+
+    try:
+        business = await authenticate_admin_session(
+            session,
+            admin_session,
+            build_admin_session_manager(),
+        )
+    except AdminSessionError:
+        raise unauthorized_admin() from None
+
+    authorized_business_id = business.id
+
+    await session.rollback()
+    return authorized_business_id
+
+
+async def authorize_business_google_integration(
+    business_id: int,
+    authorized_business_id: int = Depends(get_admin_business_id),
+) -> int:
+    if authorized_business_id != business_id:
+        raise forbidden_business()
+
+    return authorized_business_id
+
+
+def unauthorized_admin() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="Invalid business admin credentials",
+    )
+
+
+def forbidden_business() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail="Business access denied",
+    )
+
+
+CalendarReturnTo = Literal["dashboard", "onboarding"]
+
+
+def oauth_result_redirect(
+    result: str,
+    return_to: CalendarReturnTo = "dashboard",
+) -> RedirectResponse:
     frontend_url = settings.frontend_url.rstrip("/")
+    if return_to == "onboarding":
+        url = (
+            f"{frontend_url}/onboarding?step=calendar"
+            f"&google_calendar={result}"
+        )
+    else:
+        url = f"{frontend_url}/?google_calendar={result}"
+
     return RedirectResponse(
-        url=f"{frontend_url}/?google_calendar={result}",
+        url=url,
         status_code=303,
+    )
+
+
+@admin_router.get("", response_model=GoogleIntegrationStatus)
+async def get_admin_google_integration_status(
+    business_id: int = Depends(get_admin_business_id),
+    session: AsyncSession = Depends(get_session),
+) -> GoogleIntegrationStatus:
+    return await get_google_integration_status(
+        business_id=business_id,
+        authorized_business_id=business_id,
+        session=session,
+    )
+
+
+@admin_router.delete("", response_model=GoogleDisconnectResult)
+async def disconnect_admin_google_calendar(
+    business_id: int = Depends(get_admin_business_id),
+    session: AsyncSession = Depends(get_session),
+) -> GoogleDisconnectResult:
+    return await disconnect_google_calendar(
+        business_id=business_id,
+        authorized_business_id=business_id,
+        session=session,
+    )
+
+
+@admin_router.get("/connect")
+async def connect_admin_google_calendar(
+    business_id: int = Depends(get_admin_business_id),
+    session: AsyncSession = Depends(get_session),
+    return_to: CalendarReturnTo = "dashboard",
+) -> RedirectResponse:
+    return await connect_google_calendar(
+        business_id=business_id,
+        authorized_business_id=business_id,
+        session=session,
+        return_to=return_to,
     )
 
 
@@ -55,9 +164,12 @@ def oauth_result_redirect(result: str) -> RedirectResponse:
 )
 async def get_google_integration_status(
     business_id: int,
+    authorized_business_id: int = Depends(
+        authorize_business_google_integration
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> GoogleIntegrationStatus:
-    business = await session.get(Business, business_id)
+    business = await session.get(Business, authorized_business_id)
 
     if business is None:
         raise HTTPException(
@@ -68,7 +180,7 @@ async def get_google_integration_status(
     connection = await session.scalar(
         select(GoogleCalendarConnection).where(
             GoogleCalendarConnection.business_id
-            == business_id
+            == authorized_business_id
         )
     )
 
@@ -90,9 +202,12 @@ async def get_google_integration_status(
 )
 async def disconnect_google_calendar(
     business_id: int,
+    authorized_business_id: int = Depends(
+        authorize_business_google_integration
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> GoogleDisconnectResult:
-    business = await session.get(Business, business_id)
+    business = await session.get(Business, authorized_business_id)
 
     if business is None:
         raise HTTPException(
@@ -103,7 +218,7 @@ async def disconnect_google_calendar(
     connection = await session.scalar(
         select(GoogleCalendarConnection).where(
             GoogleCalendarConnection.business_id
-            == business_id
+            == authorized_business_id
         )
     )
 
@@ -119,9 +234,13 @@ async def disconnect_google_calendar(
 @router.get("/connect")
 async def connect_google_calendar(
     business_id: int,
+    authorized_business_id: int = Depends(
+        authorize_business_google_integration
+    ),
     session: AsyncSession = Depends(get_session),
+    return_to: CalendarReturnTo = "dashboard",
 ) -> RedirectResponse:
-    business = await session.get(Business, business_id)
+    business = await session.get(Business, authorized_business_id)
 
     if business is None:
         raise HTTPException(
@@ -137,6 +256,7 @@ async def connect_google_calendar(
     state = state_manager.create(
         business_id=business.id,
         code_verifier=code_verifier,
+        return_to=return_to,
     )
 
     authorization_url = oauth.build_authorization_url(
@@ -185,7 +305,7 @@ async def google_calendar_callback(
             code_verifier=oauth_state.code_verifier,
         )
     except GoogleOAuthExchangeError as exc:
-        return oauth_result_redirect("error")
+        return oauth_result_redirect("error", oauth_state.return_to)
 
     connection = await session.scalar(
         select(GoogleCalendarConnection).where(
@@ -196,7 +316,7 @@ async def google_calendar_callback(
 
     if connection is None:
         if not tokens.refresh_token:
-            return oauth_result_redirect("error")
+            return oauth_result_redirect("error", oauth_state.return_to)
 
         cipher = build_credential_cipher()
         connection = GoogleCalendarConnection(
@@ -221,4 +341,4 @@ async def google_calendar_callback(
 
     await session.commit()
 
-    return oauth_result_redirect("connected")
+    return oauth_result_redirect("connected", oauth_state.return_to)

@@ -26,6 +26,30 @@ def test_state_round_trip():
     assert state
     assert result.business_id == 42
     assert result.code_verifier == "test-code-verifier"
+    assert result.return_to == "dashboard"
+
+
+def test_state_preserves_valid_return_target():
+    manager = make_manager()
+
+    state = manager.create(
+        business_id=42,
+        code_verifier="test-code-verifier",
+        return_to="onboarding",
+    )
+
+    assert manager.verify(state).return_to == "onboarding"
+
+
+def test_state_rejects_invalid_return_target():
+    manager = make_manager()
+
+    with pytest.raises(OAuthStateError, match="Invalid OAuth return target"):
+        manager.create(
+            business_id=42,
+            code_verifier="test-code-verifier",
+            return_to="https://evil.example",
+        )
 
 
 def test_state_does_not_expose_plain_business_parameter():

@@ -23,6 +23,12 @@ class ServiceConfiguration(BaseModel):
     duration_minutes: int
 
 
+class ServicesConfigurationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    services: list[ServiceConfiguration]
+
+
 class BusinessHoursConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -32,7 +38,29 @@ class BusinessHoursConfiguration(BaseModel):
     is_closed: bool = False
 
 
+class BusinessHoursConfigurationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day_of_week: int
+    is_open: bool
+    open_time: str | None
+    close_time: str | None
+
+
+class BusinessHoursConfigurationListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hours: list[BusinessHoursConfigurationResponse]
+
+
 class BusinessConfigurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    timezone: str
+
+
+class BusinessConfigurationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
