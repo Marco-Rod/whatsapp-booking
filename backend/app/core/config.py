@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://booking:booking@localhost:5432/booking"
     slot_interval_minutes: int = Field(default=30, gt=0)
+    api_docs_enabled: bool = True
 
     whatsapp_verify_token: SecretStr = SecretStr("")
     whatsapp_access_token: SecretStr = SecretStr("")
