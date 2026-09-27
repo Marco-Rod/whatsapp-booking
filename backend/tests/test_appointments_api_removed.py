@@ -14,9 +14,14 @@ from test_booking import booking_client  # noqa: F401
             "/api/v1/appointments/1/reschedule",
             {"starts_at": "2026-09-19T12:00:00-06:00"},
         ),
+        (
+            "GET",
+            "/api/v1/availability?business_id=1&service_id=1&date=2026-09-19",
+            None,
+        ),
     ],
 )
-async def test_obsolete_appointments_http_routes_are_not_exposed(
+async def test_obsolete_public_booking_http_routes_are_not_exposed(
     booking_client,
     method,
     path,
