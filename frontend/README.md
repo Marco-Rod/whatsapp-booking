@@ -1,7 +1,8 @@
 # Dashboard de Bella Studio
 
 React + TypeScript + Vite, CSS normal. Pantalla de solo lectura que consume el
-contrato real de `GET /api/v1/businesses/{id}/dashboard?date=YYYY-MM-DD`.
+contrato autenticado de `GET /api/v1/admin/dashboard?date=YYYY-MM-DD`.
+La identidad del negocio se resuelve exclusivamente desde `admin_session`.
 
 ## Desarrollo (PowerShell)
 
@@ -21,9 +22,9 @@ npm run dev
 
 Abre http://127.0.0.1:5173. `VITE_API_BASE_URL` es el origen del backend, sin
 `/api/v1`; todas las variables VITE son públicas, no pongas secretos en ellas.
-El ID, nombre y timezone inicial del negocio se configuran en `.env` porque
-este contrato no incluye el nombre del negocio. Las horas se muestran usando
-el timezone devuelto por la API. Reinicia Vite al cambiar `.env`.
+El nombre y timezone inicial del negocio se configuran en `.env` porque este
+contrato no incluye el nombre del negocio. Las horas se muestran usando el
+timezone devuelto por la API. Reinicia Vite al cambiar `.env`.
 
 FastAPI permite por defecto GET desde localhost:5173 y 127.0.0.1:5173.
 `CORS_ALLOWED_ORIGINS` en el entorno del backend permite sustituir esa lista
@@ -37,12 +38,9 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Las tres pruebas de navegador requieren ambos servidores y la BD de desarrollo
-con las citas reales de Bella Studio. No crean ni modifican citas ni envían
-mensajes. Usan el 17/09/2026 (citas confirmadas y recordatorios enviados) y el
-18/09/2026 (cita cancelada vinculada a Calendar); el día 01/01/2040 debe estar vacío.
-Solamente se simula un fallo de red para comprobar Reintentar: la recuperación
-y las capturas consultan la API real, sin JSON mock.
+Las pruebas de navegador usan fixtures deterministas y mockean las rutas
+administrativas; no requieren citas reales, no modifican datos ni envían
+mensajes. Solamente se simula un fallo de red para comprobar Reintentar.
 
 URLs alternativas: `DASHBOARD_UI_URL` y `DASHBOARD_API_URL`.
 Las capturas desktop y móvil se guardan en `docs/screenshots/`.

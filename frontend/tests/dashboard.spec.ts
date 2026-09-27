@@ -67,8 +67,58 @@ async function mockAdminDashboard(
   })
 }
 
+function emptyDashboard(date: string): DashboardResponse {
+  return {
+    date,
+    timezone: 'America/Mexico_City',
+    summary: { total: 0, confirmed: 0, cancelled: 0 },
+    appointments: [],
+  }
+}
+
+function dashboardFixtures(nextDate: string): Map<string, DashboardResponse> {
+  const confirmed = {
+    id: 101,
+    starts_at: '2026-09-17T09:00:00-06:00',
+    ends_at: '2026-09-17T10:00:00-06:00',
+    status: 'CONFIRMED' as const,
+    service: { id: 1, name: 'Corte' },
+    customer: { id: 1, name: 'Ana' },
+    calendar_synced: false,
+    reminder_sent: false,
+  }
+  const cancelled = {
+    id: 102,
+    starts_at: '2026-09-18T11:00:00-06:00',
+    ends_at: '2026-09-18T12:00:00-06:00',
+    status: 'CANCELLED' as const,
+    service: { id: 1, name: 'Corte' },
+    customer: { id: 2, name: 'Bea' },
+    calendar_synced: true,
+    reminder_sent: false,
+  }
+
+  return new Map([
+    [initialDate, emptyDashboard(initialDate)],
+    [date, {
+      date,
+      timezone: 'America/Mexico_City',
+      summary: { total: 1, confirmed: 1, cancelled: 0 },
+      appointments: [confirmed],
+    }],
+    [cancelledDate, {
+      date: cancelledDate,
+      timezone: 'America/Mexico_City',
+      summary: { total: 1, confirmed: 0, cancelled: 1 },
+      appointments: [cancelled],
+    }],
+    [nextDate, emptyDashboard(nextDate)],
+    ['2040-01-01', emptyDashboard('2040-01-01')],
+  ])
+}
+
 for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
-  test(`${name}: real appointments, dates, statuses and screenshot`, async ({ page, request }) => {
+  test(`${name}: appointments, dates, statuses and screenshot`, async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     page.on('console', message => {
@@ -84,21 +134,7 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
     await mockGoogleCalendarIntegration(page)
     const nextDate = new Date(`${cancelledDate}T12:00:00Z`)
     nextDate.setUTCDate(nextDate.getUTCDate() + 1)
-    const fixtureDates = [
-      initialDate,
-      date,
-      cancelledDate,
-      nextDate.toISOString().slice(0, 10),
-      '2040-01-01',
-    ]
-    const fixtures = new Map<string, DashboardResponse>()
-    for (const fixtureDate of fixtureDates) {
-      const response = await request.get(
-        `${api}/api/v1/businesses/1/dashboard?date=${fixtureDate}`,
-      )
-      expect(response.ok()).toBeTruthy()
-      fixtures.set(fixtureDate, await response.json())
-    }
+    const fixtures = dashboardFixtures(nextDate.toISOString().slice(0, 10))
     await mockAdminDashboard(page, fixtures)
     const data = fixtures.get(date)!
     expect(data.appointments.length).toBeGreaterThan(0)

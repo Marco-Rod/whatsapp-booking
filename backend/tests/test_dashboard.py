@@ -22,10 +22,6 @@ async def add(sessions, start="2026-09-18T16:00:00+00:00", *, business_id=1,
         return appointment.id
 
 
-async def get(client, day="2026-09-18", business_id=1):
-    return await client.get(f"/api/v1/businesses/{business_id}/dashboard", params={"date": day})
-
-
 async def login_business(client, sessions, *, business_id=1):
     settings.admin_session_secret = SecretStr("test-admin-session-secret")
     settings.admin_session_cookie_secure = False
@@ -50,8 +46,17 @@ async def get_admin(client, day="2026-09-18", **params):
     )
 
 
-async def test_missing_business_is_404(booking_client):
-    assert (await get(booking_client[0], business_id=999)).status_code == 404
+async def get(client, sessions, day="2026-09-18", business_id=1):
+    await login_business(client, sessions, business_id=business_id)
+    return await get_admin(client, day)
+
+
+async def test_legacy_dashboard_endpoint_is_404(booking_client):
+    response = await booking_client[0].get(
+        "/api/v1/businesses/1/dashboard", params={"date": "2026-09-18"}
+    )
+
+    assert response.status_code == 404
 
 
 async def test_admin_dashboard_requires_session(booking_client):
@@ -72,10 +77,8 @@ async def test_admin_dashboard_uses_session_business_and_preserves_dto(
     await login_business(client, sessions, business_id=2)
 
     response = await get_admin(client, business_id=1)
-    expected = await get(client, business_id=2)
 
-    assert response.status_code == expected.status_code == 200
-    assert response.json() == expected.json()
+    assert response.status_code == 200
     assert response.json()["summary"]["total"] == 1
     assert response.json()["appointments"][0]["id"] == other
     assert response.json()["appointments"][0]["id"] != own
@@ -86,7 +89,7 @@ async def test_admin_dashboard_uses_session_business_and_preserves_dto(
 ])
 async def test_dashboard_cors(booking_client, origin, allowed):
     response = await booking_client[0].options(
-        "/api/v1/businesses/1/dashboard",
+        "/api/v1/admin/dashboard",
         headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
     )
     assert response.status_code == (200 if allowed else 400)
@@ -94,7 +97,7 @@ async def test_dashboard_cors(booking_client, origin, allowed):
 
 
 async def test_empty_day(booking_client):
-    response = await get(booking_client[0])
+    response = await get(*booking_client[:2])
     assert response.status_code == 200
     assert response.json() == {"date": "2026-09-18", "timezone": "America/Mexico_City",
         "summary": {"total": 0, "confirmed": 0, "cancelled": 0}, "appointments": []}
@@ -120,7 +123,7 @@ async def test_order_summary_booleans_and_private_fields(booking_client):
             AppointmentReminder(appointment_id=earlier, scheduled_for=datetime.fromisoformat("2026-09-17T16:00:00+00:00")),
             AppointmentReminder(appointment_id=pending, scheduled_for=datetime.fromisoformat("2026-09-17T17:00:00+00:00")),
         ])
-    response = await get(client)
+    response = await get(client, sessions)
     assert response.status_code == 200
     data = response.json()
     assert data["summary"] == {"total": 3, "confirmed": 2, "cancelled": 1}
@@ -142,19 +145,19 @@ async def test_utc_dates_use_local_half_open_day(booking_client):
     midnight = await add(sessions, "2026-09-18T06:00:00+00:00")
     last = await add(sessions, "2026-09-19T05:59:59+00:00")
     following = await add(sessions, "2026-09-19T06:00:00+00:00")
-    assert [a["id"] for a in (await get(client, "2026-09-17")).json()["appointments"]] == [previous]
-    assert [a["id"] for a in (await get(client)).json()["appointments"]] == [midnight, last]
-    assert [a["id"] for a in (await get(client, "2026-09-19")).json()["appointments"]] == [following]
+    assert [a["id"] for a in (await get(client, sessions, "2026-09-17")).json()["appointments"]] == [previous]
+    assert [a["id"] for a in (await get(client, sessions)).json()["appointments"]] == [midnight, last]
+    assert [a["id"] for a in (await get(client, sessions, "2026-09-19")).json()["appointments"]] == [following]
 
 
 async def test_other_business_never_appears(booking_client):
     client, sessions, _ = booking_client
     own = await add(sessions)
     other = await add(sessions, business_id=2)
-    data = (await get(client)).json()
+    data = (await get(client, sessions)).json()
     assert data["summary"]["total"] == 1
     assert [a["id"] for a in data["appointments"]] == [own]
-    assert [a["id"] for a in (await get(client, business_id=2)).json()["appointments"]] == [other]
+    assert [a["id"] for a in (await get(client, sessions, business_id=2)).json()["appointments"]] == [other]
 
 
 async def test_phone_placeholder_name_is_not_exposed(booking_client):
@@ -165,7 +168,7 @@ async def test_phone_placeholder_name_is_not_exposed(booking_client):
         await session.flush()
         customer_id = customer.id
     await add(sessions, customer_id=customer_id)
-    response = await get(client)
+    response = await get(client, sessions)
     assert response.json()["appointments"][0]["customer"] == {"id": customer_id, "name": "Sin nombre"}
     assert "+15555550123" not in response.text
 
@@ -182,10 +185,10 @@ async def test_dst_day_uses_local_midnights(booking_client, day, start, end):
     last = await add(sessions, (datetime.fromisoformat(end) - timedelta(seconds=1)).isoformat())
     await add(sessions, end)
     await add(sessions, (datetime.fromisoformat(start) - timedelta(seconds=1)).isoformat())
-    assert [a["id"] for a in (await get(client, day)).json()["appointments"]] == [first, last]
+    assert [a["id"] for a in (await get(client, sessions, day)).json()["appointments"]] == [first, last]
 
 
-async def test_fifty_appointments_use_two_selects(booking_client):
+async def test_fifty_appointments_use_two_dashboard_selects_after_session_validation(booking_client):
     client, sessions, _ = booking_client
     async with sessions.begin() as session:
         for minute in range(50):
@@ -194,6 +197,7 @@ async def test_fifty_appointments_use_two_selects(booking_client):
                                    ends_at=start + timedelta(hours=1), status="CONFIRMED"))
     queries = []
     engine = sessions.kw["bind"].sync_engine
+    await login_business(client, sessions)
 
     def capture(conn, cursor, statement, parameters, context, executemany):
         if statement.lstrip().upper().startswith("SELECT"):
@@ -201,14 +205,15 @@ async def test_fifty_appointments_use_two_selects(booking_client):
 
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        response = await get(client)
+        response = await get_admin(client)
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert response.status_code == 200
     assert response.json()["summary"]["total"] == 50
-    assert len(queries) == 2
+    # The first lookup validates admin_session; dashboard retrieval remains two SELECTs.
+    assert len(queries) == 3
 
 
 @pytest.mark.parametrize("day", ["not-a-date", "2026-02-30", "9999-12-31"])
 async def test_invalid_dates_are_422(booking_client, day):
-    assert (await get(booking_client[0], day)).status_code == 422
+    assert (await get(booking_client[0], booking_client[1], day)).status_code == 422

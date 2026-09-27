@@ -1,6 +1,9 @@
-# Dashboard API (Day 5, checkpoint 4)
+# Dashboard API
 
-`GET /api/v1/businesses/{business_id}/dashboard?date=2026-09-18`
+`GET /api/v1/admin/dashboard?date=2026-09-18`
+
+Authentication is required through `admin_session`. The business identity comes
+exclusively from that session; clients cannot provide or select a business ID.
 
 `date` is required and represents the business's LOCAL day. The service constructs
 both local midnights using Business.timezone and queries the half-open UTC range
@@ -22,12 +25,12 @@ booleans:
 
 No phone numbers, calendar event IDs, reminder timestamps or claims are returned.
 Phone-as-name placeholders from WhatsApp are displayed as “Sin nombre”.
-The endpoint makes two SELECTs regardless of appointment count: business lookup,
-then a joined projection with a correlated EXISTS for sent reminders. Multiple
-reminder rows do not duplicate appointments. All appointment results and joined
-service/customer data are scoped to the requested business.
+After validating the administrative session, the dashboard retrieval makes two
+SELECTs regardless of appointment count: business lookup, then a joined
+projection with a correlated EXISTS for sent reminders. Multiple reminder rows
+do not duplicate appointments. All appointment results and joined
+service/customer data are scoped to the authenticated business.
 
-An unknown business returns 404. A valid empty day returns 200 with zero counts
-and an empty list. Invalid dates or unsupported calendar boundaries return 422.
-No mutations, external calls, new migrations, authentication implementation or
-React changes are included in this checkpoint.
+A valid empty day returns 200 with zero counts and an empty list. Invalid dates
+or unsupported calendar boundaries return 422. The endpoint performs no
+mutations or external calls.
