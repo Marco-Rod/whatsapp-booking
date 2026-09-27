@@ -6,14 +6,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import Depends
 from sqlalchemy import func, select
 
 from test_booking import booking_client
 from test_conversation_engine import NOW
-from app.api.v1.whatsapp import get_webhook_service, get_whatsapp_settings
+from app.api.v1 import whatsapp as whatsapp_api
 from app.core.config import Settings
-from app.core.database import get_session
 from app.integrations.google_calendar.client import GoogleCalendarClient
 from app.integrations.whatsapp.client import WhatsAppClient, WhatsAppSendError
 from app.integrations.whatsapp.parser import parse_messages
@@ -40,7 +38,7 @@ def envelope(text="hola", message_id="wamid.test"):
 
 
 @pytest_asyncio.fixture
-async def webhook(booking_client):
+async def webhook(booking_client, monkeypatch):
     client, sessions, postgres = booking_client
     config = Settings(_env_file=None, whatsapp_verify_token="test-verify", whatsapp_access_token="test-token",
                       whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0", meta_app_secret="test-app-secret")
@@ -66,13 +64,18 @@ async def webhook(booking_client):
         business = await session.get(Business, 1)
         business.phone_number = "+523300000001"
 
-    def service(session=Depends(get_session)):
+    async def processing_session():
+        async with sessions() as session:
+            yield session
+
+    def service(session, config):
         fault["session"] = session
         return WebhookService(session, sender, config, TestEngine(session, clock=lambda: NOW),
                               calendar_resolver=resolver)
 
-    app.dependency_overrides[get_webhook_service] = service
-    app.dependency_overrides[get_whatsapp_settings] = lambda: config
+    monkeypatch.setattr(whatsapp_api, "get_session", processing_session)
+    monkeypatch.setattr(whatsapp_api, "create_webhook_service", service)
+    app.dependency_overrides[whatsapp_api.get_whatsapp_settings] = lambda: config
     async def sign_request(request):
         if request.method == "POST" and request.url.path == URL:
             request.headers["X-Hub-Signature-256"] = "sha256=" + hmac.new(
@@ -82,8 +85,7 @@ async def webhook(booking_client):
         yield client, sessions, sender, calls, fault, postgres
     finally:
         client.event_hooks["request"].remove(sign_request)
-        app.dependency_overrides.pop(get_webhook_service, None)
-        app.dependency_overrides.pop(get_whatsapp_settings, None)
+        app.dependency_overrides.pop(whatsapp_api.get_whatsapp_settings, None)
 
 
 @pytest.mark.parametrize("mode,token,status", [("subscribe","test-verify",200),

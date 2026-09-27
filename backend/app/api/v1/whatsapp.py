@@ -27,14 +27,51 @@ def log_whatsapp_configuration_error(error: WhatsAppConfigurationError) -> None:
     )
 
 
-def get_webhook_service(session: Annotated[AsyncSession, Depends(get_session)],
-                        config=Depends(get_whatsapp_settings)):
+def create_webhook_service(session: AsyncSession, config):
     return WebhookService(
         session,
         WhatsAppClient(config),
         config,
         calendar_resolver=CalendarClientResolver(session),
     )
+
+
+async def read_webhook_body(request: Request, maximum_bytes: int) -> bytes:
+    """Read a request body without buffering more than the configured maximum."""
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            if int(declared_length) > maximum_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Webhook payload too large",
+                )
+        except ValueError:
+            # Missing or malformed Content-Length is not trusted; stream instead.
+            pass
+
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > maximum_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail="Webhook payload too large",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def process_signed_webhook(payload: dict, config) -> None:
+    """Acquire database resources only after request authentication succeeds."""
+    session_generator = get_session()
+    try:
+        session = await anext(session_generator)
+        service = create_webhook_service(session, config)
+        await service.process(payload)
+    finally:
+        await session_generator.aclose()
 
 
 @router.get("/webhooks/whatsapp", response_class=PlainTextResponse)
@@ -51,9 +88,11 @@ async def verify(mode: Annotated[str, Query(alias="hub.mode")],
 
 
 @router.post("/webhooks/whatsapp")
-async def receive(request: Request, service=Depends(get_webhook_service),
-                  config=Depends(get_whatsapp_settings)):
-    raw_body = await request.body()
+async def receive(request: Request, config=Depends(get_whatsapp_settings)):
+    raw_body = await read_webhook_body(
+        request,
+        config.whatsapp_webhook_max_body_bytes,
+    )
     try:
         verify_webhook_signature(raw_body, request.headers.get("X-Hub-Signature-256"),
                                  config.meta_app_secret.get_secret_value())
@@ -65,7 +104,7 @@ async def receive(request: Request, service=Depends(get_webhook_service),
         payload = json.loads(raw_body)
         if not isinstance(payload, dict):
             raise ValueError("Expected a JSON object")
-        await service.process(payload)
+        await process_signed_webhook(payload, config)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid WhatsApp payload") from None
     except WhatsAppConfigurationError as exc:

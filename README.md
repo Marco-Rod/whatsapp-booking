@@ -170,6 +170,37 @@ actual); no existe un worker Celery persistente.
 La configuración de producción vive fuera del repositorio y aporta los secretos
 de Meta, Google, cifrado y sesión administrativa.
 
+### Validación del proxy y webhook
+
+Antes de aplicar cambios al proxy, valida el Caddyfile:
+
+```powershell
+docker compose -f compose.prod.yml run --rm --no-deps caddy `
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+El POST del webhook de WhatsApp está limitado a `1 MiB` en Caddy y a
+`WHATSAPP_WEBHOOK_MAX_BODY_BYTES` en la aplicación (por defecto, `1048576`).
+Para comprobar el rechazo perimetral sin enviar secretos, define
+`WEBHOOK_URL` como la URL HTTPS pública y envía un archivo sintético de
+`1048577` bytes:
+
+```powershell
+$bodyPath = Join-Path $env:TEMP "whatsapp-webhook-oversize.bin"
+[System.IO.File]::WriteAllBytes($bodyPath, [byte[]]::new(1048577))
+try {
+  curl.exe --silent --output NUL --write-out "%{http_code}`n" `
+    --request POST "$env:WEBHOOK_URL/api/v1/webhooks/whatsapp" `
+    --data-binary "@$bodyPath"
+} finally {
+  Remove-Item -LiteralPath $bodyPath
+}
+```
+
+La respuesta esperada es `413`. Al rechazarlo Caddy, la petición no debe
+aparecer en los access logs de la API; de cualquier forma, esos logs nunca
+deben incluir bodies ni query strings.
+
 ## Seguridad
 
 - Verificación HMAC SHA-256 de los webhooks de Meta.
