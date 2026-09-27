@@ -9,9 +9,26 @@ async function mockGoogleIdentity(page: import('@playwright/test').Page) {
   }))
 }
 
+async function mockUnauthenticatedSession(
+  page: import('@playwright/test').Page,
+) {
+  await page.route('http://localhost:8000/api/v1/onboarding/status', (route) =>
+    route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      headers: {
+        'access-control-allow-origin': 'http://localhost:5173',
+        'access-control-allow-credentials': 'true',
+      },
+      body: JSON.stringify({ detail: 'Invalid business admin credentials' }),
+    }),
+  )
+}
+
 test('loads GIS once and renders one button under StrictMode', async ({ page }) => {
   await mockGoogleIdentity(page)
-  await page.goto('/google-signin-demo')
+  await mockUnauthenticatedSession(page)
+  await page.goto('/login')
 
   await expect(page.getByText('Continuar con Google')).toBeVisible()
   await expect(page.locator('#google-identity-services')).toHaveCount(1)
@@ -27,6 +44,7 @@ test('unlinked identity is rejected without exposing its credential', async ({ p
   const consoleMessages: string[] = []
   page.on('console', message => consoleMessages.push(message.text()))
   await mockGoogleIdentity(page)
+  await mockUnauthenticatedSession(page)
   await page.route(
     'http://localhost:8000/api/v1/admin/google/session',
     route => route.fulfill({
@@ -35,7 +53,7 @@ test('unlinked identity is rejected without exposing its credential', async ({ p
       body: JSON.stringify({ detail: 'Invalid Google admin authentication' }),
     }),
   )
-  await page.goto('/google-signin-demo')
+  await page.goto('/login')
   await expect(page.getByText('Continuar con Google')).toBeVisible()
 
   await page.evaluate(value => {
@@ -44,6 +62,7 @@ test('unlinked identity is rejected without exposing its credential', async ({ p
   }, credential)
 
   await expect(page.getByText('Esta cuenta todavía no está vinculada.')).toBeVisible()
+  await expect(page.getByLabel('Clave de activación')).toHaveCount(0)
   await expect(page.locator('body')).not.toContainText(credential)
   expect(consoleMessages.join('\n')).not.toContain(credential)
   expect(await page.evaluate(() => ({
@@ -54,7 +73,8 @@ test('unlinked identity is rejected without exposing its credential', async ({ p
 
 test('missing credential fails without exposing data', async ({ page }) => {
   await mockGoogleIdentity(page)
-  await page.goto('/google-signin-demo')
+  await mockUnauthenticatedSession(page)
+  await page.goto('/login')
   await expect(page.getByText('Continuar con Google')).toBeVisible()
 
   await page.evaluate(() => {
@@ -63,27 +83,24 @@ test('missing credential fails without exposing data', async ({ page }) => {
   })
 
   await expect(page.getByRole('alert')).toContainText('No pudimos cargar Google Sign-In')
-  await expect(page.getByText('Acceso administrativo confirmado')).toHaveCount(0)
+  await expect(page.getByText('Esta cuenta todavía no está vinculada.')).toHaveCount(0)
 })
 
 test('GIS load failure leaves the application usable', async ({ page }) => {
+  await mockUnauthenticatedSession(page)
   await page.route('https://accounts.google.com/gsi/client', route => route.abort('failed'))
-  await page.goto('/google-signin-demo')
+  await page.goto('/login')
 
   await expect(page.getByRole('heading', { name: 'Administra tu negocio.' })).toBeVisible()
   await expect(page.getByRole('alert')).toContainText('No pudimos cargar Google Sign-In')
 })
 
-test('missing client configuration does not load GIS', async ({ page }) => {
-  let requested = false
-  await page.route('https://accounts.google.com/gsi/client', route => {
-    requested = true
-    return route.abort()
-  })
+test('legacy demo route redirects to login', async ({ page }) => {
+  await mockGoogleIdentity(page)
+  await mockUnauthenticatedSession(page)
 
-  await page.goto('/google-signin-demo/unconfigured')
+  await page.goto('/google-signin-demo')
 
-  await expect(page.getByRole('alert')).toHaveText('Google Sign-In no está configurado.')
-  await expect(page.locator('#google-identity-services')).toHaveCount(0)
-  expect(requested).toBe(false)
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByText('Continuar con Google')).toBeVisible()
 })

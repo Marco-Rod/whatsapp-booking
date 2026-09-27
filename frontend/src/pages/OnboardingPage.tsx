@@ -97,7 +97,7 @@ export function OnboardingPage() {
       setCurrentStep(requestedStep ?? getInitialStep(onboardingStatus))
     } catch (requestError) {
       if (requestError instanceof AdminAuthError && requestError.status === 401) {
-        window.location.assign('/google-signin-demo')
+        window.location.assign('/login')
         return
       }
 
@@ -117,7 +117,7 @@ export function OnboardingPage() {
       setBusinessConfiguration(await getOnboardingBusiness())
     } catch (requestError) {
       if (requestError instanceof AdminAuthError && requestError.status === 401) {
-        window.location.assign('/google-signin-demo')
+        window.location.assign('/login')
         return
       }
 
@@ -139,7 +139,7 @@ export function OnboardingPage() {
       setServicesConfiguration(await getOnboardingServices())
     } catch (requestError) {
       if (requestError instanceof AdminAuthError && requestError.status === 401) {
-        window.location.assign('/google-signin-demo')
+        window.location.assign('/login')
         return
       }
 
@@ -161,7 +161,7 @@ export function OnboardingPage() {
       setHoursConfiguration(await getOnboardingHours())
     } catch (requestError) {
       if (requestError instanceof AdminAuthError && requestError.status === 401) {
-        window.location.assign('/google-signin-demo')
+        window.location.assign('/login')
         return
       }
 
@@ -210,7 +210,7 @@ export function OnboardingPage() {
   }
 
   function handleCalendarUnauthorized() {
-    window.location.assign('/google-signin-demo')
+    window.location.assign('/login')
   }
 
   function handleCompleted(updatedStatus: OnboardingStatus) {

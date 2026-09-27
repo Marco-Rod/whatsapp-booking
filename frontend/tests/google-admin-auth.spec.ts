@@ -45,6 +45,7 @@ const onboarding = {
 
 test('initial activation sends Bearer only to link and uses the HttpOnly cookie', async ({ page, context }) => {
   const requests: Array<{ url: string; method: string; authorization?: string; body?: string | null; cookie?: string }> = []
+  let sessionActive = false
   await mockGoogleIdentity(page)
   await page.route('http://localhost:8000/**', async route => {
     const request = route.request()
@@ -57,6 +58,7 @@ test('initial activation sends Bearer only to link and uses the HttpOnly cookie'
       cookie: request.headers().cookie,
     })
     if (request.url().endsWith('/admin/google/link')) {
+      sessionActive = true
       await context.addCookies([
         {
           name: 'admin_session',
@@ -72,6 +74,14 @@ test('initial activation sends Bearer only to link and uses the HttpOnly cookie'
         headers: responseHeaders(),
       })
     }
+    if (request.url().endsWith('/onboarding/status') && !sessionActive) {
+      return route.fulfill({
+        status: 401,
+        headers: responseHeaders(),
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Invalid business admin credentials' }),
+      })
+    }
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -79,7 +89,7 @@ test('initial activation sends Bearer only to link and uses the HttpOnly cookie'
       body: JSON.stringify(onboarding),
     })
   })
-  await page.goto('/google-signin-demo')
+  await page.goto('/login')
   await page.getByRole('button', { name: /Activar mi negocio/ }).click()
   const key = page.getByLabel('Clave de activación')
   await expect(key).toHaveAttribute('type', 'password')
@@ -88,11 +98,12 @@ test('initial activation sends Bearer only to link and uses the HttpOnly cookie'
 
   await sendGoogleCredential(page)
 
-  await expect(page.getByText('✓ Acceso administrativo confirmado')).toBeVisible()
-  await expect(page.getByText('Tu cuenta Google quedó vinculada correctamente.')).toBeVisible()
-  await expect(page.getByLabel('Clave de activación')).toHaveCount(0)
+  await expect(page).toHaveURL(/\/onboarding$/)
   const link = requests.find(request => request.url.endsWith('/admin/google/link'))
-  const status = requests.find(request => request.url.endsWith('/onboarding/status'))
+  const status = requests.find(request =>
+    request.url.endsWith('/onboarding/status') &&
+    request.cookie?.includes('admin_session=signed-session'),
+  )
   expect(link?.authorization).toBe(`Bearer ${activationKey}`)
   expect(link?.body).toBe(JSON.stringify({ credential }))
   expect(status?.authorization).toBeUndefined()
@@ -104,18 +115,30 @@ test('initial activation sends Bearer only to link and uses the HttpOnly cookie'
 
 test('daily Google login sends no Bearer and obtains onboarding status', async ({ page }) => {
   const authorizations: Array<string | undefined> = []
+  let sessionActive = false
   await mockGoogleIdentity(page)
   await page.route('http://localhost:8000/**', route => {
     const request = route.request()
     if (request.method() === 'OPTIONS') return cors(route)
     authorizations.push(request.headers().authorization)
-    if (request.url().endsWith('/admin/google/session')) return route.fulfill({
-      status: 204,
-      headers: {
-        ...responseHeaders(),
-        'set-cookie': 'admin_session=signed-session; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800',
-      },
-    })
+    if (request.url().endsWith('/admin/google/session')) {
+      sessionActive = true
+      return route.fulfill({
+        status: 204,
+        headers: {
+          ...responseHeaders(),
+          'set-cookie': 'admin_session=signed-session; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800',
+        },
+      })
+    }
+    if (request.url().endsWith('/onboarding/status') && !sessionActive) {
+      return route.fulfill({
+        status: 401,
+        headers: responseHeaders(),
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Invalid business admin credentials' }),
+      })
+    }
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -123,32 +146,42 @@ test('daily Google login sends no Bearer and obtains onboarding status', async (
       body: JSON.stringify(onboarding),
     })
   })
-  await page.goto('/google-signin-demo')
+  await page.goto('/login')
   await expect(page.getByText('Continuar con Google')).toBeVisible()
 
   await sendGoogleCredential(page)
 
-  await expect(page.getByText('Sesión iniciada correctamente.')).toBeVisible()
-  await expect(page.getByText('✓ Acceso administrativo confirmado')).toBeVisible()
-  expect(authorizations).toEqual([undefined, undefined])
+  await expect(page).toHaveURL(/\/onboarding$/)
+  expect(authorizations.every(value => value === undefined)).toBeTruthy()
 })
 
-test('logout removes the authenticated UI', async ({ page }) => {
+test('completed onboarding redirects daily Google login to the dashboard', async ({ page }) => {
+  const completedOnboarding = {
+    ...onboarding,
+    completed: true,
+  }
+  let sessionActive = false
   await mockGoogleIdentity(page)
   await page.route('http://localhost:8000/**', route => {
     const request = route.request()
     if (request.method() === 'OPTIONS') return cors(route)
-    if (request.method() === 'DELETE') return route.fulfill({ status: 200, headers: responseHeaders(), contentType: 'application/json', body: '{"authenticated":false}' })
-    if (request.url().endsWith('/admin/google/session')) return route.fulfill({ status: 204, headers: { ...responseHeaders(), 'set-cookie': 'admin_session=signed-session; Path=/; HttpOnly; SameSite=Lax' } })
-    return route.fulfill({ status: 200, headers: responseHeaders(), contentType: 'application/json', body: JSON.stringify(onboarding) })
+    if (request.url().endsWith('/admin/google/session')) {
+      sessionActive = true
+      return route.fulfill({ status: 204, headers: { ...responseHeaders(), 'set-cookie': 'admin_session=signed-session; Path=/; HttpOnly; SameSite=Lax' } })
+    }
+    if (request.url().endsWith('/onboarding/status') && !sessionActive) {
+      return route.fulfill({
+        status: 401,
+        headers: responseHeaders(),
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Invalid business admin credentials' }),
+      })
+    }
+    return route.fulfill({ status: 200, headers: responseHeaders(), contentType: 'application/json', body: JSON.stringify(completedOnboarding) })
   })
-  await page.goto('/google-signin-demo')
-  await sendGoogleCredential(page)
-  await expect(page.getByText('✓ Acceso administrativo confirmado')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Cerrar sesión' }).click()
-
-  await expect(page.getByText('Sesión cerrada.')).toBeVisible()
-  await expect(page.getByText('✓ Acceso administrativo confirmado')).toHaveCount(0)
+  await page.goto('/login')
   await expect(page.getByText('Continuar con Google')).toBeVisible()
+  await sendGoogleCredential(page)
+
+  await expect(page).toHaveURL(/\/$/)
 })

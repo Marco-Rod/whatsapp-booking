@@ -105,6 +105,40 @@ a {
   color:#65735b;
   background:#f5f7f0
 }
+.topbar-actions {
+  align-items:center;
+  display:flex;
+  gap:18px
+}
+.dashboard-logout {
+  background:transparent;
+  border:1px solid #d4ddd0;
+  border-radius:7px;
+  color:#315f4c;
+  cursor:pointer;
+  font:600 12px/1 'DM Sans',sans-serif;
+  min-height:36px;
+  padding:0 12px
+}
+.dashboard-logout:hover:not(:disabled) {
+  background:#f3f7f0;
+  border-color:#aabca7
+}
+.dashboard-logout:focus-visible {
+  outline:3px solid #b7d4b3;
+  outline-offset:2px
+}
+.dashboard-logout:disabled {
+  cursor:wait;
+  opacity:.65
+}
+.dashboard-logout-error {
+  color:#a53737;
+  font-size:13px;
+  margin:12px auto -4px;
+  max-width:1184px;
+  padding:0 40px
+}
 main {
   max-width:1184px;
   padding:49px 32px 0;
@@ -895,6 +929,39 @@ h1>span {
   padding-bottom:36px;
   border-bottom:1px solid #e7ece3
 }
+.onboarding__header-copy {
+  position:relative
+}
+.onboarding__logout {
+  background:transparent;
+  border:1px solid #d4ddd0;
+  border-radius:7px;
+  color:#315f4c;
+  cursor:pointer;
+  font:600 12px/1 'DM Sans',sans-serif;
+  min-height:34px;
+  padding:0 11px;
+  position:absolute;
+  right:0;
+  top:0
+}
+.onboarding__logout:hover:not(:disabled) {
+  background:#f3f7f0;
+  border-color:#aabca7
+}
+.onboarding__logout:focus-visible {
+  outline:3px solid #b7d4b3;
+  outline-offset:2px
+}
+.onboarding__logout:disabled {
+  cursor:wait;
+  opacity:.65
+}
+.onboarding__logout-error {
+  color:#a53737;
+  font-size:13px;
+  margin:12px 0 0
+}
 .onboarding__brand {
   display:flex;
   align-items:center;
@@ -1572,6 +1639,10 @@ h1>span {
   display:block;
   padding-bottom:27px
 }
+.onboarding__logout {
+  right:0;
+  top:-4px
+}
 .onboarding__brand {
   margin-bottom:27px
 }
@@ -1712,6 +1783,19 @@ h1>span {
 }
 .business-avatar {
   display:none
+}
+.topbar-actions {
+  gap:10px
+}
+.dashboard-logout {
+  font-size:11px;
+  min-height:32px;
+  padding:0 9px
+}
+.dashboard-logout-error {
+  font-size:12px;
+  margin-top:10px;
+  padding:0 20px
 }
 .business {
   font-size:12px;

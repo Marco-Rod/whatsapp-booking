@@ -4,16 +4,23 @@ import type { DashboardResponse } from '../src/types/dashboard'
 const api = process.env.DASHBOARD_API_URL || 'http://localhost:8000'
 const date = process.env.DASHBOARD_TEST_DATE || '2026-09-17'
 const cancelledDate = process.env.DASHBOARD_CANCELLED_DATE || '2026-09-18'
+const initialDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Mexico_City',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date())
+const responseHeaders = {
+  'access-control-allow-origin': 'http://localhost:5173',
+  'access-control-allow-credentials': 'true',
+}
 
 async function mockGoogleCalendarIntegration(page: Page) {
   await page.route(`${api}/api/v1/admin/integrations/google`, route =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      headers: {
-        'access-control-allow-origin': 'http://localhost:5173',
-        'access-control-allow-credentials': 'true',
-      },
+      headers: responseHeaders,
       body: JSON.stringify({
         connected: false,
         calendar_id: null,
@@ -21,6 +28,43 @@ async function mockGoogleCalendarIntegration(page: Page) {
       }),
     }),
   )
+}
+
+async function mockCompletedSession(page: Page) {
+  await page.route(`${api}/api/v1/onboarding/status`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: responseHeaders,
+      body: JSON.stringify({
+        completed: true,
+        ready: true,
+        steps: {
+          business: true,
+          services: true,
+          hours: true,
+          calendar: false,
+        },
+      }),
+    }),
+  )
+}
+
+async function mockAdminDashboard(
+  page: Page,
+  fixtures: Map<string, DashboardResponse>,
+) {
+  await page.route(`${api}/api/v1/admin/dashboard?*`, route => {
+    const requestedDate = new URL(route.request().url()).searchParams.get('date')
+    const data = requestedDate ? fixtures.get(requestedDate) : undefined
+
+    return route.fulfill({
+      status: data ? 200 : 404,
+      contentType: 'application/json',
+      headers: responseHeaders,
+      body: JSON.stringify(data ?? { detail: 'No encontramos este negocio.' }),
+    })
+  })
 }
 
 for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
@@ -36,10 +80,27 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
       }
     })
     await page.setViewportSize({ width, height })
+    await mockCompletedSession(page)
     await mockGoogleCalendarIntegration(page)
-    const response = await request.get(`${api}/api/v1/businesses/1/dashboard?date=${date}`)
-    expect(response.ok()).toBeTruthy()
-    const data: DashboardResponse = await response.json()
+    const nextDate = new Date(`${cancelledDate}T12:00:00Z`)
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+    const fixtureDates = [
+      initialDate,
+      date,
+      cancelledDate,
+      nextDate.toISOString().slice(0, 10),
+      '2040-01-01',
+    ]
+    const fixtures = new Map<string, DashboardResponse>()
+    for (const fixtureDate of fixtureDates) {
+      const response = await request.get(
+        `${api}/api/v1/businesses/1/dashboard?date=${fixtureDate}`,
+      )
+      expect(response.ok()).toBeTruthy()
+      fixtures.set(fixtureDate, await response.json())
+    }
+    await mockAdminDashboard(page, fixtures)
+    const data = fixtures.get(date)!
     expect(data.appointments.length).toBeGreaterThan(0)
     await page.goto('/')
     await page.getByLabel('Fecha de la agenda').fill(date)
@@ -67,8 +128,6 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
     await expect(page.getByTestId('appointment')).toContainText('Calendar vinculado')
     await expect(page.getByTestId('appointment')).toContainText('Recordatorio pendiente')
     await page.getByRole('button', { name: 'Día siguiente' }).click()
-    const nextDate = new Date(`${cancelledDate}T12:00:00Z`)
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
     await expect(page.getByLabel('Fecha de la agenda')).toHaveValue(nextDate.toISOString().slice(0, 10))
     await page.getByLabel('Fecha de la agenda').fill('2040-01-01')
     await expect(page.getByText('No tienes citas para este día')).toBeVisible()
@@ -77,14 +136,25 @@ for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 84
   })
 }
 
-test('loading, network error and retry with real API recovery', async ({ page }) => {
+test('loading, network error and retry with administrative dashboard recovery', async ({ page }) => {
   let fail = true
+  await mockCompletedSession(page)
   await mockGoogleCalendarIntegration(page)
-  await page.route('**/dashboard?*', async route => {
+  await page.route(`${api}/api/v1/admin/dashboard?*`, async route => {
     if (fail) {
       await new Promise(resolve => setTimeout(resolve, 500))
       await route.abort('failed')
-    } else await route.continue()
+    } else await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: responseHeaders,
+      body: JSON.stringify({
+        date: '2026-09-26',
+        timezone: 'America/Mexico_City',
+        summary: { total: 0, confirmed: 0, cancelled: 0 },
+        appointments: [],
+      }),
+    })
   })
   await page.goto('/')
   await expect(

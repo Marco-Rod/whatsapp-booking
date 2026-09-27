@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { getDashboard } from '../api/dashboard'
+import { AdminAuthError, logoutAdmin } from '../api/adminAuth'
 import { AppointmentCard } from '../components/AppointmentCard'
 import { GoogleCalendarIntegrationCard } from '../components/GoogleCalendarIntegrationCard'
 import { Icon } from '../components/Icon'
 import { SummaryCard } from '../components/SummaryCard'
 import type { DashboardResponse } from '../types/dashboard'
 
-const businessId = Number(import.meta.env.VITE_BUSINESS_ID || 1)
 const businessName = import.meta.env.VITE_BUSINESS_NAME || 'Bella Studio'
 const initialTimezone = import.meta.env.VITE_BUSINESS_TIMEZONE || 'America/Mexico_City'
 const todayIn = (timezone: string) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -32,19 +32,40 @@ export function DashboardPage() {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [googleCalendarNotice, setGoogleCalendarNotice] = useState<GoogleCalendarNotice>(consumeGoogleCalendarNotice)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [logoutError, setLogoutError] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
     setState({ kind: 'loading' })
-    getDashboard(businessId, date, controller.signal).then(data => {
+    getDashboard(date, controller.signal).then(data => {
       if (!controller.signal.aborted) { setTimezone(data.timezone); setState({ kind: 'success', data }) }
     }).catch(error => {
+      if (error instanceof AdminAuthError && error.status === 401) {
+        window.location.assign('/login')
+        return
+      }
       if (!controller.signal.aborted) setState({ kind: 'error', message: error instanceof TypeError ? 'No pudimos conectar con tu agenda. Revisa tu conexión e intenta de nuevo.' : error.message })
     })
     return () => controller.abort()
   }, [date, attempt])
 
+  async function handleLogout() {
+    if (isLoggingOut) return
+
+    setIsLoggingOut(true)
+    setLogoutError(false)
+    try {
+      await logoutAdmin()
+      window.location.assign('/login')
+    } catch {
+      setIsLoggingOut(false)
+      setLogoutError(true)
+    }
+  }
+
   return <>
-    <header className="topbar"><div className="topbar-inner"><a className="brand" href="/" aria-label="WhatsApp Booking, inicio"><span className="brand-mark">w<span>·</span></span><span>WhatsApp <b>Booking</b></span></a><div className="business"><span className="business-avatar">BS</span><span>{businessName}<small>Agenda del negocio</small></span></div></div></header>
+    <header className="topbar"><div className="topbar-inner"><a className="brand" href="/" aria-label="WhatsApp Booking, inicio"><span className="brand-mark">w<span>·</span></span><span>WhatsApp <b>Booking</b></span></a><div className="topbar-actions"><div className="business"><span className="business-avatar">BS</span><span>{businessName}<small>Agenda del negocio</small></span></div><button className="dashboard-logout" type="button" onClick={handleLogout} disabled={isLoggingOut}>{isLoggingOut ? 'Cerrando sesión…' : 'Cerrar sesión'}</button></div></div></header>
+    {logoutError && <p className="dashboard-logout-error" role="alert">No pudimos cerrar la sesión. Inténtalo nuevamente.</p>}
     <main>
       <section className="page-heading"><div><div className="eyebrow"><span/> TU NEGOCIO, AL DÍA</div><h1>Citas del día<span>.</span></h1><p>Una mirada a tu agenda. Todo en su lugar.</p></div><div className="date-control"><div className="date-nav"><button onClick={() => setDate(shiftDay(date, -1))} aria-label="Día anterior"><Icon name="arrow-left"/></button><label className="date-field"><Icon name="calendar"/><input aria-label="Fecha de la agenda" type="date" value={date} min="1900-01-01" max="9998-12-31" onChange={event => { if (event.target.validity.valid && event.target.value) setDate(event.target.value) }}/></label><button onClick={() => setDate(shiftDay(date, 1))} aria-label="Día siguiente"><Icon name="arrow-right"/></button></div><span className="date-caption">{readableDate(date)}</span></div></section>
 

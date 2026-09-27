@@ -124,10 +124,7 @@ valores reales.
   `ADMIN_SESSION_MAX_AGE_SECONDS`, `ADMIN_SESSION_COOKIE_SECURE`,
   `ADMIN_SESSION_COOKIE_SAMESITE`.
 - **Frontend público:** `VITE_API_BASE_URL`, `VITE_GOOGLE_IDENTITY_CLIENT_ID`,
-  `VITE_BUSINESS_ID`, `VITE_BUSINESS_NAME` y `VITE_BUSINESS_TIMEZONE`.
-
-`VITE_BUSINESS_ID` sigue siendo una dependencia del endpoint actual del
-Dashboard; no interviene en onboarding ni Google Calendar.
+  `VITE_BUSINESS_NAME` y `VITE_BUSINESS_TIMEZONE`.
 
 No coloques secretos en variables `VITE_*`: se incluyen en el bundle del
 frontend.

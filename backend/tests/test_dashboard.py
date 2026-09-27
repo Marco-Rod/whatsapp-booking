@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import event
 
 from test_booking import booking_client
 from app.models import Appointment, AppointmentReminder, Business, Customer
+from app.core.config import settings
+from app.security.admin_tokens import hash_admin_token
 
 
 async def add(sessions, start="2026-09-18T16:00:00+00:00", *, business_id=1,
@@ -23,8 +26,59 @@ async def get(client, day="2026-09-18", business_id=1):
     return await client.get(f"/api/v1/businesses/{business_id}/dashboard", params={"date": day})
 
 
+async def login_business(client, sessions, *, business_id=1):
+    settings.admin_session_secret = SecretStr("test-admin-session-secret")
+    settings.admin_session_cookie_secure = False
+    settings.admin_session_cookie_samesite = "lax"
+    token = f"dashboard-admin-token-{business_id}"
+    async with sessions.begin() as session:
+        business = await session.get(Business, business_id)
+        business.admin_token_hash = hash_admin_token(token)
+
+    response = await client.post(
+        "/api/v1/admin/session",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    return {}
+
+
+async def get_admin(client, day="2026-09-18", **params):
+    return await client.get(
+        "/api/v1/admin/dashboard",
+        params={"date": day, **params},
+    )
+
+
 async def test_missing_business_is_404(booking_client):
     assert (await get(booking_client[0], business_id=999)).status_code == 404
+
+
+async def test_admin_dashboard_requires_session(booking_client):
+    response = await get_admin(booking_client[0])
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Invalid business admin credentials"
+    }
+
+
+async def test_admin_dashboard_uses_session_business_and_preserves_dto(
+    booking_client,
+):
+    client, sessions, _ = booking_client
+    own = await add(sessions, business_id=1)
+    other = await add(sessions, business_id=2)
+    await login_business(client, sessions, business_id=2)
+
+    response = await get_admin(client, business_id=1)
+    expected = await get(client, business_id=2)
+
+    assert response.status_code == expected.status_code == 200
+    assert response.json() == expected.json()
+    assert response.json()["summary"]["total"] == 1
+    assert response.json()["appointments"][0]["id"] == other
+    assert response.json()["appointments"][0]["id"] != own
 
 
 @pytest.mark.parametrize("origin,allowed", [
