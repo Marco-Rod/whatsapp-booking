@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import ClientDisconnect
 
 from app.core.config import settings
 from app.core.database import get_session
@@ -89,10 +90,16 @@ async def verify(mode: Annotated[str, Query(alias="hub.mode")],
 
 @router.post("/webhooks/whatsapp")
 async def receive(request: Request, config=Depends(get_whatsapp_settings)):
-    raw_body = await read_webhook_body(
-        request,
-        config.whatsapp_webhook_max_body_bytes,
-    )
+    try:
+        raw_body = await read_webhook_body(
+            request,
+            config.whatsapp_webhook_max_body_bytes,
+        )
+    except ClientDisconnect:
+        raise HTTPException(
+            status_code=400,
+            detail="Request body was interrupted",
+        ) from None
     try:
         verify_webhook_signature(raw_body, request.headers.get("X-Hub-Signature-256"),
                                  config.meta_app_secret.get_secret_value())

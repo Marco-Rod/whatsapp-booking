@@ -21,19 +21,21 @@ def sign(body):
     return "sha256=" + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
 
 
-async def post_without_content_length(chunks, headers=None):
+async def post_without_content_length(chunks, headers=None, disconnect_after=False):
     messages = [
         {
             "type": "http.request",
             "body": chunk,
-            "more_body": index < len(chunks) - 1,
+            "more_body": disconnect_after or index < len(chunks) - 1,
         }
         for index, chunk in enumerate(chunks)
     ]
     sent = []
 
     async def receive():
-        return messages.pop(0)
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.disconnect"}
 
     async def send(message):
         sent.append(message)
@@ -194,6 +196,27 @@ async def test_chunked_body_over_limit_rejects_before_hmac_or_session(monkeypatc
             b"x",
         ])
         assert status == 413
+        assert hmac_calls == 0
+        assert calls() == (0, 0)
+    finally:
+        app.dependency_overrides.pop(whatsapp_api.get_whatsapp_settings, None)
+
+
+async def test_interrupted_body_rejects_before_hmac_or_session(monkeypatch):
+    calls = install_size_guard_dependencies(monkeypatch)
+    hmac_calls = 0
+
+    def verify(*args):
+        nonlocal hmac_calls
+        hmac_calls += 1
+
+    monkeypatch.setattr(whatsapp_api, "verify_webhook_signature", verify)
+    try:
+        status = await post_without_content_length(
+            [b"partial"],
+            disconnect_after=True,
+        )
+        assert status == 400
         assert hmac_calls == 0
         assert calls() == (0, 0)
     finally:
