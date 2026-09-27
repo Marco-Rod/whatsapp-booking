@@ -46,37 +46,25 @@ are omitted from Calendar descriptions.
 
 ## RESCHEDULE checkpoint
 
-The REST reschedule endpoint commits through BookingService first, then invokes
-BookingCalendarSync. Its read transaction also ends before Calendar is called.
+An internal caller commits the reschedule through BookingService first, then
+invokes BookingCalendarSync. Its read transaction also ends before Calendar is called.
 CalendarService updates the existing event only when both calendar_id and
 calendar_event_id exist; it never falls back to CREATE or changes the stored ID.
-If Google fails, the endpoint still returns the committed new booking times.
+If Google fails, the committed new booking times remain intact.
 Rejected reschedules never reach Calendar. Independent simultaneous reschedules
 are not serialized across Google calls yet; eventual reconciliation remains a
 future concern, as with recovery from a failed update.
-
-From backend, `python ../scripts/replay_calendar_reschedule.py` exercises the
-actual REST handler in-process against the configured PostgreSQL and Google. It
-moves test appointment #3 to September 18, 2026, 16:00–17:00 Mexico City time and
-reads the same event back, checking ID equality and both times. It does not
-rebuild Docker, send WhatsApp messages, or change cancellation behavior.
 
 ## CANCEL checkpoint
 
 `cancel_appointment_with_result` reports `was_cancelled_now`, calculated under
 the same business lock as the transition and returned only after commit. The
 existing `cancel_appointment` method preserves its original response contract.
-The REST endpoint invokes Calendar only for a CONFIRMED -> CANCELLED transition.
+The internal caller invokes Calendar only for a CONFIRMED -> CANCELLED transition.
 A repeated cancellation returns the same response without deleting again.
 
 `calendar_event_id` is retained after deletion for traceability: it identifies
 the associated external resource, not necessarily an active event. A failed
 Google delete does not undo cancellation or clear this ID. Repeating the cancel
-endpoint does not retry a failed Google deletion; explicit reconciliation is
+operation does not retry a failed Google deletion; explicit reconciliation is
 still pending. CalendarService needs only Appointment and Business for deletion.
-
-From backend, `python ../scripts/replay_calendar_cancel.py` cancels test booking
-#3, repeats the request, verifies only one sync, and checks via events.get that
-the original event is absent (404/410) or has status=cancelled. It leaves the
-cancelled appointment and its original ID in PostgreSQL. This lifecycle script
-is intended to run once after the CREATE and RESCHEDULE replays.
