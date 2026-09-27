@@ -113,7 +113,10 @@ class GoogleOAuthService:
         try:
             flow.fetch_token(code=code)
         except Exception as exc:
-            logger.exception("Google OAuth token exchange failed")
+            logger.warning(
+                "Google OAuth token exchange failed (%s)",
+                type(exc).__name__,
+            )
             raise GoogleOAuthExchangeError(
                 "Unable to exchange Google OAuth authorization code"
             ) from exc

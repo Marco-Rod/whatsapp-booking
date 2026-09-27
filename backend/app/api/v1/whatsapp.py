@@ -20,6 +20,13 @@ def get_whatsapp_settings():
     return settings
 
 
+def log_whatsapp_configuration_error(error: WhatsAppConfigurationError) -> None:
+    logger.warning(
+        "WhatsApp configuration error (%s)",
+        type(error).__name__,
+    )
+
+
 def get_webhook_service(session: Annotated[AsyncSession, Depends(get_session)],
                         config=Depends(get_whatsapp_settings)):
     return WebhookService(
@@ -62,7 +69,7 @@ async def receive(request: Request, service=Depends(get_webhook_service),
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid WhatsApp payload") from None
     except WhatsAppConfigurationError as exc:
-        logger.warning("WhatsApp configuration error: %s", exc)
+        log_whatsapp_configuration_error(exc)
         raise HTTPException(
             status_code=503,
             detail="WhatsApp is not configured",

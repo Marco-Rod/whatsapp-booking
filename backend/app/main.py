@@ -1,6 +1,9 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import Settings, settings
+from app.core.access_logging import configure_uvicorn_access_logging
 from app.api.v1.availability import router
 from app.api.v1.appointments import router as appointments_router
 from app.api.v1.whatsapp import router as whatsapp_router
@@ -17,12 +20,19 @@ from app.api.v1.admin_sessions import router as admin_sessions_router
 from app.api.v1.google_admin_auth import router as google_admin_auth_router
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        # Runs after Uvicorn has applied its logging configuration.
+        configure_uvicorn_access_logging()
+        yield
+
     app = FastAPI(
         title="Booking Core",
         version="0.1.0",
         docs_url="/docs" if app_settings.api_docs_enabled else None,
         redoc_url="/redoc" if app_settings.api_docs_enabled else None,
         openapi_url="/openapi.json" if app_settings.api_docs_enabled else None,
+        lifespan=lifespan,
     )
     app.add_middleware(CORSMiddleware, allow_origins=app_settings.cors_allowed_origins,
                        allow_credentials=True,
@@ -43,6 +53,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    # Keeps direct create_app() use in tests safe; lifespan repeats this after
+    # Uvicorn configures its logger in a real server process.
+    configure_uvicorn_access_logging()
     return app
 
 
