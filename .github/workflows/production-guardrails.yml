@@ -1,0 +1,17 @@
+name: Production guardrails
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-production-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production Compose with example values
+        run: >-
+          docker compose --env-file .env.production.example
+          -f compose.prod.yml config -q

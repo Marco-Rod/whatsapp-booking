@@ -170,6 +170,50 @@ actual); no existe un worker Celery persistente.
 La configuración de producción vive fuera del repositorio y aporta los secretos
 de Meta, Google, cifrado y sesión administrativa.
 
+### Topología de proxy y redes
+
+```text
+Internet
+  |
+Caddy (.2, edge)
+  |
+API (.3, edge + data)
+  |
+PostgreSQL (data solamente)
+```
+
+`edge` usa un subnet configurable, con `172.30.250.0/29` como valor por
+defecto. `CADDY_EDGE_IP` y `API_EDGE_IP` son, respectivamente,
+`172.30.250.2` y `172.30.250.3`; ambas direcciones son intencionalmente fijas.
+No se debe volver a asignar la IP de API dinámicamente mientras Uvicorn confíe
+en la IP fija de Caddy.
+
+Uvicorn usa `--proxy-headers` y confía exclusivamente en
+`CADDY_EDGE_IP`; nunca debe configurarse `--forwarded-allow-ips="*"`.
+Así `request.client.host` representa la identidad ya resuelta del cliente para
+controles como el rate limit de autenticación Google, sin que la aplicación
+interprete `X-Forwarded-For` directamente. `data` es `internal: true`; Caddy
+no pertenece a esa red y PostgreSQL no pertenece a `edge`. Sólo Caddy publica
+puertos en el host.
+
+El rate limiter actual es local, in-memory y acotado. Ante alta cardinalidad
+de IPs, su eviction LRU prioriza disponibilidad sobre una protección
+distribuida perfecta; al escalar a varias instancias deberá sustituirse por un
+control de borde o un store compartido.
+
+### Checklist antes de desplegar
+
+Antes de cualquier `docker compose ... up`, valida siempre la configuración
+contra el archivo real de producción, sin imprimirla:
+
+```powershell
+docker compose --env-file .env.production -f compose.prod.yml config -q
+```
+
+No ejecutes `docker compose config` sin `-q` contra producción: puede renderizar
+secretos. Si hace falta inspeccionar la topología, extrae sólo campos no
+sensibles, como los servicios, redes o direcciones IP estáticas.
+
 ### Validación del proxy y webhook
 
 Antes de aplicar cambios al proxy, valida el Caddyfile:
