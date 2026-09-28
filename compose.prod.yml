@@ -12,6 +12,9 @@ services:
       - caddy_config:/config
     depends_on:
       - api
+    networks:
+      edge:
+        ipv4_address: ${CADDY_EDGE_IP:-172.30.250.2}
 
   db:
     image: postgres:16
@@ -22,6 +25,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data_prod:/var/lib/postgresql/data
+    networks:
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -56,16 +61,35 @@ services:
       ADMIN_SESSION_MAX_AGE_SECONDS: ${ADMIN_SESSION_MAX_AGE_SECONDS:-604800}
       ADMIN_SESSION_COOKIE_SECURE: ${ADMIN_SESSION_COOKIE_SECURE:-true}
       ADMIN_SESSION_COOKIE_SAMESITE: ${ADMIN_SESSION_COOKIE_SAMESITE:-none}
+      CADDY_EDGE_IP: ${CADDY_EDGE_IP:-172.30.250.2}
 
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - edge
+      - data
 
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command:
+      - sh
+      - -c
+      - >
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+        --proxy-headers --forwarded-allow-ips "$$CADDY_EDGE_IP"
 
 volumes:
   postgres_data_prod:
   caddy_data:
   caddy_config:
+
+networks:
+  # Check this candidate subnet against the Lightsail Docker host before deployment.
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-172.30.250.0/29}
+  data:
+    driver: bridge
+    internal: true

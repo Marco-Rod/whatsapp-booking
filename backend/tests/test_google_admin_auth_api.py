@@ -9,6 +9,7 @@ from test_booking import booking_client  # noqa: F401
 from app.api.v1 import google_admin_auth
 from app.core.config import Settings, settings
 from app.core.database import get_session
+from app.core.rate_limit import FixedWindowRateLimiter
 from app.main import app
 from app.models import Business, BusinessUser
 from app.security.admin_sessions import AdminSessionManager
@@ -17,6 +18,7 @@ from app.security.google_identity import (
     GoogleIdentity,
     GoogleIdentityError,
 )
+from app.services import google_admin_auth as google_admin_auth_service
 
 
 LINK_URL = "/api/v1/admin/google/link"
@@ -26,6 +28,33 @@ ADMIN_TOKEN = "bella-admin-token"
 GOOGLE_CREDENTIAL = "google-id-token-value"
 SESSION_SECRET = "google-admin-api-session-secret"
 AUTH_BODY_LIMIT = 32
+
+
+@pytest.fixture(autouse=True)
+def isolate_google_auth_rate_limiters():
+    app.dependency_overrides[google_admin_auth.get_google_session_limiter] = (
+        lambda: FixedWindowRateLimiter(
+            limit=12,
+            window_seconds=600,
+            capacity=64,
+        )
+    )
+    app.dependency_overrides[google_admin_auth.get_google_link_limiter] = (
+        lambda: FixedWindowRateLimiter(
+            limit=5,
+            window_seconds=1_800,
+            capacity=64,
+        )
+    )
+    yield
+    app.dependency_overrides.pop(
+        google_admin_auth.get_google_session_limiter,
+        None,
+    )
+    app.dependency_overrides.pop(
+        google_admin_auth.get_google_link_limiter,
+        None,
+    )
 
 
 def configure_session_cookie(*, secure=False, samesite="lax"):
@@ -266,6 +295,228 @@ async def test_google_auth_interrupted_body_rejects_before_verifier_or_session(
         assert session_calls() == 0
     finally:
         cleanup()
+
+
+async def test_google_session_rate_limit_rejects_before_google_or_db(
+    booking_client,
+    monkeypatch,
+):
+    client, _, _ = booking_client
+    verifier = use_google_verifier(
+        monkeypatch,
+        error=GoogleIdentityError("invalid"),
+    )
+    limiter = FixedWindowRateLimiter(
+        limit=12,
+        window_seconds=600,
+        capacity=16,
+    )
+    app.dependency_overrides[google_admin_auth.get_google_session_limiter] = (
+        lambda: limiter
+    )
+
+    for _ in range(12):
+        assert (await client.post(SESSION_URL, json={"credential": "x"})).status_code == 401
+
+    response = await client.post(SESSION_URL, json={"credential": "x"})
+    assert response.status_code == 429
+    assert response.headers["retry-after"].isdigit()
+    assert response.json() == {
+        "detail": "Too many authentication attempts. Try again later."
+    }
+    assert verifier.verify.await_count == 12
+
+
+async def test_google_link_rate_limit_is_independent_and_rejects_before_google(
+    booking_client,
+    monkeypatch,
+):
+    client, sessions, _ = booking_client
+    await enable_admin(sessions)
+    verifier = use_google_verifier(
+        monkeypatch,
+        error=GoogleIdentityError("invalid"),
+    )
+    limiter = FixedWindowRateLimiter(
+        limit=5,
+        window_seconds=1_800,
+        capacity=16,
+    )
+    app.dependency_overrides[google_admin_auth.get_google_link_limiter] = (
+        lambda: limiter
+    )
+
+    for _ in range(5):
+        assert (
+            await client.post(
+                LINK_URL,
+                headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+                json={"credential": "x"},
+            )
+        ).status_code == 401
+
+    response = await client.post(
+        LINK_URL,
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        json={"credential": "x"},
+    )
+    assert response.status_code == 429
+    assert verifier.verify.await_count == 5
+
+
+async def test_google_session_invalid_body_consumes_quota_before_validation(
+    booking_client,
+    monkeypatch,
+):
+    client, _, _ = booking_client
+    limiter = FixedWindowRateLimiter(
+        limit=1,
+        window_seconds=60,
+        capacity=16,
+    )
+    app.dependency_overrides[google_admin_auth.get_google_session_limiter] = (
+        lambda: limiter
+    )
+    parse_calls = 0
+    original_parse = google_admin_auth._parse_google_credential
+
+    def parse(raw_body):
+        nonlocal parse_calls
+        parse_calls += 1
+        return original_parse(raw_body)
+
+    monkeypatch.setattr(google_admin_auth, "_parse_google_credential", parse)
+    assert (await client.post(SESSION_URL, json={})).status_code == 422
+    assert (await client.post(SESSION_URL, json={})).status_code == 429
+    assert parse_calls == 1
+
+
+async def test_google_session_verifies_identity_before_acquiring_db_session(
+    booking_client,
+    monkeypatch,
+):
+    client, sessions, _ = booking_client
+    configure_session_cookie()
+    await enable_admin(sessions)
+    await add_linked_user(sessions)
+    events = []
+    verifier = use_google_verifier(monkeypatch)
+
+    async def verify(_credential):
+        events.append("google")
+        return trusted_identity()
+
+    verifier.verify.side_effect = verify
+    previous_session_override = app.dependency_overrides[get_session]
+
+    async def tracked_session():
+        events.append("db")
+        async for session in previous_session_override():
+            yield session
+
+    app.dependency_overrides[get_session] = tracked_session
+    try:
+        response = await client.post(
+            SESSION_URL,
+            json={"credential": GOOGLE_CREDENTIAL},
+        )
+        assert response.status_code == 204
+        assert events[:2] == ["google", "db"]
+    finally:
+        app.dependency_overrides[get_session] = previous_session_override
+
+
+async def test_google_link_authenticates_bootstrap_before_google_verification(
+    booking_client,
+    monkeypatch,
+):
+    client, sessions, _ = booking_client
+    configure_session_cookie()
+    await enable_admin(sessions)
+    events = []
+    verifier = use_google_verifier(monkeypatch)
+    original_authenticate = google_admin_auth_service.authenticate_business_admin
+
+    async def authenticate(session, token):
+        events.append("bootstrap")
+        return await original_authenticate(session, token)
+
+    async def verify(_credential):
+        events.append("google")
+        return trusted_identity()
+
+    monkeypatch.setattr(
+        google_admin_auth_service,
+        "authenticate_business_admin",
+        authenticate,
+    )
+    verifier.verify.side_effect = verify
+    response = await client.post(
+        LINK_URL,
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        json={"credential": GOOGLE_CREDENTIAL},
+    )
+    assert response.status_code == 204
+    assert events == ["bootstrap", "google"]
+
+
+async def test_google_auth_early_body_failures_do_not_consume_quota(
+    booking_client,
+    monkeypatch,
+):
+    client, _, _ = booking_client
+    config = settings.model_copy(
+        update={"google_admin_auth_max_body_bytes": AUTH_BODY_LIMIT},
+    )
+    limiter = FixedWindowRateLimiter(
+        limit=1,
+        window_seconds=60,
+        capacity=16,
+    )
+    app.dependency_overrides[google_admin_auth.get_google_admin_auth_settings] = (
+        lambda: config
+    )
+    app.dependency_overrides[google_admin_auth.get_google_session_limiter] = (
+        lambda: limiter
+    )
+    try:
+        assert (
+            await client.post(SESSION_URL, content=b"x" * (AUTH_BODY_LIMIT + 1))
+        ).status_code == 413
+        assert (await client.post(SESSION_URL, json={})).status_code == 422
+        assert (await client.post(SESSION_URL, json={})).status_code == 429
+    finally:
+        app.dependency_overrides.pop(
+            google_admin_auth.get_google_admin_auth_settings,
+            None,
+        )
+
+
+async def test_google_auth_client_disconnect_does_not_consume_quota(
+    booking_client,
+):
+    client, _, _ = booking_client
+    limiter = FixedWindowRateLimiter(
+        limit=1,
+        window_seconds=60,
+        capacity=16,
+    )
+    app.dependency_overrides[google_admin_auth.get_google_session_limiter] = (
+        lambda: limiter
+    )
+    try:
+        assert await post_without_content_length(
+            SESSION_URL,
+            [b'{"credential":"partial'],
+            disconnect=True,
+        ) == 400
+        assert (await client.post(SESSION_URL, json={})).status_code == 422
+        assert (await client.post(SESSION_URL, json={})).status_code == 429
+    finally:
+        app.dependency_overrides.pop(
+            google_admin_auth.get_google_session_limiter,
+            None,
+        )
 
 
 async def test_google_link_creates_user_and_session_cookie(

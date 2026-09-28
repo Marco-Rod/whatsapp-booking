@@ -101,34 +101,29 @@ class GoogleAdminAuthService:
             identity = await self.identity_verifier.verify(
                 google_credential
             )
-            user = await self.session.scalar(
-                select(BusinessUser).where(
-                    BusinessUser.auth_provider == "google",
-                    BusinessUser.provider_subject
-                    == identity.subject,
-                )
-            )
-            if user is None:
-                raise GoogleAdminAuthError(
-                    "Invalid Google admin authentication"
-                )
-
-            business = await self.session.get(
-                Business,
-                user.business_id,
-            )
-            if business is None or business.admin_token_hash is None:
-                raise GoogleAdminAuthError(
-                    "Invalid Google admin authentication"
-                )
-
-            return GoogleAdminAuthentication(
-                business=business,
-                user=user,
-            )
+            return await self.authenticate_google_identity(identity)
         except GoogleAdminAuthError:
             raise
         except GoogleIdentityError as exc:
             raise GoogleAdminAuthError(
                 "Invalid Google admin authentication"
             ) from exc
+
+    async def authenticate_google_identity(
+        self,
+        identity: GoogleIdentity,
+    ) -> GoogleAdminAuthentication:
+        user = await self.session.scalar(
+            select(BusinessUser).where(
+                BusinessUser.auth_provider == "google",
+                BusinessUser.provider_subject == identity.subject,
+            )
+        )
+        if user is None:
+            raise GoogleAdminAuthError("Invalid Google admin authentication")
+
+        business = await self.session.get(Business, user.business_id)
+        if business is None or business.admin_token_hash is None:
+            raise GoogleAdminAuthError("Invalid Google admin authentication")
+
+        return GoogleAdminAuthentication(business=business, user=user)
