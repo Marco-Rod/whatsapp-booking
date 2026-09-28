@@ -117,8 +117,8 @@ valores reales.
 - **Base de datos y API:** `DATABASE_URL`, `SLOT_INTERVAL_MINUTES`,
   `CORS_ALLOWED_ORIGINS`, `FRONTEND_URL`.
 - **Meta / WhatsApp:** `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_ACCESS_TOKEN`,
-  `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION`, `META_APP_SECRET` y
-  `WHATSAPP_LEGACY_BUSINESS_ID`.
+  `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_WABA_ID`, `WHATSAPP_API_VERSION`,
+  `META_APP_SECRET` y `WHATSAPP_LEGACY_BUSINESS_ID`.
 - **Google:** `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
   `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_IDENTITY_CLIENT_ID`.
 - **Seguridad:** `CREDENTIAL_ENCRYPTION_KEY`, `ADMIN_SESSION_SECRET`,
@@ -180,6 +180,25 @@ se migra a una conexión persistida. Si falta la variable y no existe una
 conexión persistida activa, el envío se rechaza: las credenciales globales no
 se usan como fallback para otro negocio. No versiones un identificador real de
 producción.
+
+### Backfill explícito de una conexión legacy
+
+Antes de retirar el puente legacy, cada negocio que aún use las credenciales
+globales debe migrarse explícitamente una vez:
+
+```powershell
+cd backend
+backfill-whatsapp-connection --business-id <ID> --dry-run
+backfill-whatsapp-connection --business-id <ID>
+```
+
+El comando exige `--business-id`; nunca infiere el propietario por un número
+telefónico, WABA ni por el orden de registros. Lee `WHATSAPP_ACCESS_TOKEN`,
+`WHATSAPP_PHONE_NUMBER_ID` y `WHATSAPP_WABA_ID` exclusivamente del entorno,
+cifra el token con `CREDENTIAL_ENCRYPTION_KEY` y no acepta tokens por CLI.
+No se ejecuta automáticamente durante un despliegue ni forma parte de una
+migración Alembic. Una ejecución repetida con la misma conexión activa es un
+no-op; conflictos o conexiones inactivas requieren intervención explícita.
 
 ### Topología de proxy y redes
 

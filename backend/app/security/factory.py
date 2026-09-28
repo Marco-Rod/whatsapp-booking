@@ -1,6 +1,6 @@
 import hashlib
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.security.credentials import (
     CredentialCipher,
     CredentialEncryptionError,
@@ -16,8 +16,9 @@ from app.security.google_identity import (
 )
 
 
-def build_credential_cipher() -> CredentialCipher:
-    secret = settings.credential_encryption_key
+def build_credential_cipher(config: Settings | None = None) -> CredentialCipher:
+    config = config or settings
+    secret = config.credential_encryption_key
 
     if secret is None:
         raise CredentialEncryptionError(
