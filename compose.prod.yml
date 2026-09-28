@@ -69,7 +69,7 @@ services:
     networks:
       edge:
         ipv4_address: ${API_EDGE_IP:-172.30.250.3}
-      - data
+      data:
 
     command:
       - sh
