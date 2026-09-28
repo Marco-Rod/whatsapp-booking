@@ -124,6 +124,38 @@ async def test_unknown_connection_does_not_require_credential_configuration(
         assert await resolver.resolve_from_phone_number_id("unknown") is None
 
 
+async def test_routing_identity_never_decrypts_credentials(
+    booking_client,
+    cipher,
+):
+    _, sessions, _ = booking_client
+    async with sessions.begin() as session:
+        resolver = WhatsAppConnectionResolver(session, cipher=cipher)
+        session.add(
+            connection(
+                resolver,
+                business_id=1,
+                waba_id="waba-a",
+                phone_number_id="phone-a",
+                access_token="access-token-a",
+            )
+        )
+
+    class RoutingCipher:
+        def decrypt(self, value):
+            raise AssertionError("Inbound routing must not decrypt credentials")
+
+    async with sessions() as session:
+        routing = await WhatsAppConnectionResolver(
+            session,
+            cipher=RoutingCipher(),
+        ).find_routing_identity("phone-a")
+
+    assert routing is not None
+    assert routing.business_id == 1
+    assert routing.status == WhatsAppConnectionStatus.CONNECTED.value
+
+
 async def test_connected_resolver_excludes_pending_and_disconnected_connections(
     booking_client,
     cipher,

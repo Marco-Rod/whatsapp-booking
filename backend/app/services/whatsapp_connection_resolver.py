@@ -22,6 +22,16 @@ class ResolvedWhatsAppConnection:
     granted_scopes: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class WhatsAppRoutingIdentity:
+    """Credential-free identity used to route authenticated inbound webhooks."""
+
+    connection_id: int
+    business_id: int
+    phone_number_id: str
+    status: str
+
+
 class WhatsAppConnectionResolver:
     """Resolve active per-business connections without exposing credentials to APIs."""
 
@@ -77,6 +87,29 @@ class WhatsAppConnectionResolver:
             phone_number_id
         )
         return self._resolve_active(connection)
+
+    async def find_routing_identity(
+        self,
+        phone_number_id: str,
+    ) -> WhatsAppRoutingIdentity | None:
+        """Find any persisted connection without decrypting its credentials.
+
+        Callers must accept only ``connected`` identities for provider routing.
+        Returning inactive identities lets the webhook distinguish a deliberately
+        disabled connection from a phone number with no persisted connection.
+        """
+        connection = await self.repository.get_by_phone_number_id(
+            phone_number_id
+        )
+        if connection is None:
+            return None
+
+        return WhatsAppRoutingIdentity(
+            connection_id=connection.id,
+            business_id=connection.business_id,
+            phone_number_id=connection.phone_number_id,
+            status=connection.status,
+        )
 
     def _resolve_active(
         self,

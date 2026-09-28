@@ -6,7 +6,13 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.integrations.google_calendar.errors import GoogleCalendarError
-from app.models import Appointment, Business, Customer, Service
+from app.models import (
+    Appointment,
+    Business,
+    Customer,
+    Service,
+    WhatsAppConnectionStatus,
+)
 from app.integrations.whatsapp.client import WhatsAppConfigurationError
 from app.integrations.whatsapp.parser import parse_messages
 from app.repositories.booking import BookingRepository
@@ -14,6 +20,9 @@ from app.repositories.inbound_messages import InboundMessageRepository
 from app.services.calendar import CalendarService
 from app.services.calendar_resolver import CalendarClientResolver
 from app.services.conversation.engine import ConversationEngine
+from app.services.whatsapp_connection_resolver import (
+    WhatsAppConnectionResolver,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,27 +37,27 @@ def verify_webhook(config, mode, token, challenge):
 
 
 class WebhookService:
-    def __init__(self, session, client, config, engine=None, calendar_resolver=None):
+    def __init__(self, session, client, config, engine=None, calendar_resolver=None,
+                 whatsapp_connection_resolver=None):
         self.session = session
         self.client = client
         self.config = config
         self.repository = InboundMessageRepository(session)
         self.engine = engine or ConversationEngine(session)
         self.calendar_resolver: CalendarClientResolver | None = calendar_resolver
+        self.whatsapp_connection_resolver: WhatsAppConnectionResolver = (
+            whatsapp_connection_resolver
+            or WhatsAppConnectionResolver(session)
+        )
 
     async def process(self, payload):
         messages = parse_messages(payload)
         for message in messages:
-            if not self.config.whatsapp_phone_number_id:
-                raise WhatsAppConfigurationError("WhatsApp receiving number is not configured")
-            if message.phone_number_id != self.config.whatsapp_phone_number_id:
-                continue
             appointment_id = None
             async with self.session.begin():
-                ids = await self.repository.business_ids(message.business_phone)
-                if len(ids) != 1:
-                    raise WhatsAppConfigurationError("Receiving number must map to exactly one business")
-                business_id = ids[0]
+                business_id = await self._resolve_business_id(message)
+                if business_id is None:
+                    continue
                 await BookingRepository(self.session).lock_business(business_id)
                 inbound = await self.repository.find(business_id, message.external_message_id)
                 if inbound is None:
@@ -65,6 +74,38 @@ class WebhookService:
             if appointment_id is not None:
                 await self._sync_calendar(appointment_id)
             await self._deliver(inbound_id)
+
+    async def _resolve_business_id(self, message) -> int | None:
+        """Route signed inbound traffic persisted-first, then legacy-only.
+
+        A stored inactive connection intentionally blocks the legacy bridge for
+        that phone number. This prevents a disconnected/pending connection from
+        silently routing through a display number. The bridge exists only until
+        the single deployment-wide connection is migrated in a later phase.
+        """
+        routing = await self.whatsapp_connection_resolver.find_routing_identity(
+            message.phone_number_id
+        )
+        if routing is not None:
+            if routing.status == WhatsAppConnectionStatus.CONNECTED.value:
+                return routing.business_id
+            return None
+
+        # Temporary A2 legacy bridge. Do not use display_phone_number unless
+        # this is precisely the configured deployment-wide phone number.
+        if not self.config.whatsapp_phone_number_id:
+            raise WhatsAppConfigurationError(
+                "WhatsApp receiving number is not configured"
+            )
+        if message.phone_number_id != self.config.whatsapp_phone_number_id:
+            return None
+
+        ids = await self.repository.business_ids(message.business_phone)
+        if len(ids) != 1:
+            raise WhatsAppConfigurationError(
+                "Receiving number must map to exactly one business"
+            )
+        return ids[0]
 
     async def _sync_calendar(self, appointment_id: int) -> None:
         if self.calendar_resolver is None:
