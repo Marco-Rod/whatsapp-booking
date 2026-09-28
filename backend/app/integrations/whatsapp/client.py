@@ -26,27 +26,23 @@ def _to_meta_recipient(phone: str) -> str:
 
 
 class WhatsAppClient:
-    def __init__(self, config=None, transport=None, *, access_token=None,
-                 phone_number_id=None, api_version=None):
-        if config is not None and any(
-            value is not None
-            for value in (access_token, phone_number_id, api_version)
-        ):
-            raise ValueError("Use configured or explicit WhatsApp credentials, not both")
-        self.config = config
+    """Meta client bound to one explicitly resolved business connection."""
+
+    def __init__(
+        self,
+        *,
+        access_token: str,
+        phone_number_id: str,
+        api_version: str,
+        transport=None,
+    ):
         self.transport = transport
         self._access_token = access_token
         self._phone_number_id = phone_number_id
         self._api_version = api_version
 
     def _credentials(self) -> tuple[str, str, str]:
-        if self.config is not None:
-            return (
-                self.config.whatsapp_access_token.get_secret_value(),
-                self.config.whatsapp_phone_number_id,
-                self.config.whatsapp_api_version,
-            )
-        return self._access_token or "", self._phone_number_id or "", self._api_version or ""
+        return self._access_token, self._phone_number_id, self._api_version
 
     async def send_text(self, phone: str, text: str) -> None:
         if phone.startswith("demo:"):

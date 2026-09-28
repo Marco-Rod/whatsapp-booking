@@ -42,8 +42,4 @@ class WhatsAppSender:
             await client.send_text(recipient, text)
             return
 
-        if self.config.whatsapp_legacy_business_id == business_id:
-            await self.client_factory(self.config).send_text(recipient, text)
-            return
-
         raise WhatsAppChannelUnavailable("Business has no WhatsApp connection")

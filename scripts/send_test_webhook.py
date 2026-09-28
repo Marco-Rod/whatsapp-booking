@@ -1,10 +1,10 @@
 """Send a signed development webhook using the secret from the environment.
 
 Copy whatsapp_message.example.json to whatsapp_message.json (gitignored).
-Replace its fictional IDs and recipient with your test configuration. The receiving
-display_phone_number must match Business.phone_number after normalization with '+',
-and phone_number_id must match WHATSAPP_PHONE_NUMBER_ID. The example receiver is
-+15555550100; configure that business for mocks or use your seeded receiver locally.
+Replace its fictional IDs and recipient with your test configuration. The payload's
+phone_number_id must belong to a persisted connected WhatsAppConnection. The display
+phone number does not select a Business. The example receiver is +15555550100; use a
+seeded connection or a local mock for development.
 """
 import hashlib
 import hmac

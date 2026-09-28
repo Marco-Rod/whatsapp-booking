@@ -118,7 +118,7 @@ valores reales.
   `CORS_ALLOWED_ORIGINS`, `FRONTEND_URL`.
 - **Meta / WhatsApp:** `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_ACCESS_TOKEN`,
   `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_WABA_ID`, `WHATSAPP_API_VERSION`,
-  `META_APP_SECRET` y `WHATSAPP_LEGACY_BUSINESS_ID`.
+  `META_APP_SECRET`.
 - **Google:** `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
   `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_IDENTITY_CLIENT_ID`.
 - **Seguridad:** `CREDENTIAL_ENCRYPTION_KEY`, `ADMIN_SESSION_SECRET`,
@@ -171,20 +171,12 @@ actual); no existe un worker Celery persistente.
 La configuración de producción vive fuera del repositorio y aporta los secretos
 de Meta, Google, cifrado y sesión administrativa.
 
-### Puente temporal de WhatsApp
-
-Antes de desplegar A3, configura `WHATSAPP_LEGACY_BUSINESS_ID` en el entorno
-de producción con el identificador del negocio que actualmente posee las
-credenciales globales de WhatsApp. Es un puente temporal mientras ese número
-se migra a una conexión persistida. Si falta la variable y no existe una
-conexión persistida activa, el envío se rechaza: las credenciales globales no
-se usan como fallback para otro negocio. No versiones un identificador real de
-producción.
-
 ### Backfill explícito de una conexión legacy
 
-Antes de retirar el puente legacy, cada negocio que aún use las credenciales
-globales debe migrarse explícitamente una vez:
+El runtime enruta y envía exclusivamente mediante una `WhatsAppConnection`
+persistida. Las credenciales legacy sólo se conservan como fuente de este
+comando operacional de recuperación/migración; no son un fallback de runtime.
+Cada negocio legacy debe migrarse explícitamente una vez:
 
 ```powershell
 cd backend

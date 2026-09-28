@@ -76,13 +76,7 @@ class WebhookService:
             await self._deliver(inbound_id)
 
     async def _resolve_business_id(self, message) -> int | None:
-        """Route signed inbound traffic persisted-first, then legacy-only.
-
-        A stored inactive connection intentionally blocks the legacy bridge for
-        that phone number. This prevents a disconnected/pending connection from
-        silently routing through a display number. The bridge exists only until
-        the single deployment-wide connection is migrated in a later phase.
-        """
+        """Route signed inbound traffic only through connected persisted links."""
         routing = await self.whatsapp_connection_resolver.find_routing_identity(
             message.phone_number_id
         )
@@ -90,22 +84,7 @@ class WebhookService:
             if routing.status == WhatsAppConnectionStatus.CONNECTED.value:
                 return routing.business_id
             return None
-
-        # Temporary A2 legacy bridge. Do not use display_phone_number unless
-        # this is precisely the configured deployment-wide phone number.
-        if not self.config.whatsapp_phone_number_id:
-            raise WhatsAppConfigurationError(
-                "WhatsApp receiving number is not configured"
-            )
-        if message.phone_number_id != self.config.whatsapp_phone_number_id:
-            return None
-
-        ids = await self.repository.business_ids(message.business_phone)
-        if len(ids) != 1:
-            raise WhatsAppConfigurationError(
-                "Receiving number must map to exactly one business"
-            )
-        return ids[0]
+        return None
 
     async def _sync_calendar(self, appointment_id: int) -> None:
         if self.calendar_resolver is None:

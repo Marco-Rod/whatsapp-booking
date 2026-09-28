@@ -50,7 +50,7 @@ async def test_sender_uses_each_business_persisted_credentials(booking_client):
     async with sessions() as session:
         sender = WhatsAppSender(
             session,
-            Settings(_env_file=None, whatsapp_api_version="v99.0", whatsapp_legacy_business_id=1),
+            Settings(_env_file=None, whatsapp_api_version="v99.0"),
             resolver=WhatsAppConnectionResolver(session, cipher=secret),
             client_factory=factory,
         )
@@ -64,7 +64,7 @@ async def test_sender_uses_each_business_persisted_credentials(booking_client):
 
 
 @pytest.mark.parametrize("status", ["pending", "disconnected", "error"])
-async def test_inactive_connection_never_falls_back_to_legacy(booking_client, status):
+async def test_inactive_connection_never_uses_configured_global_credentials(booking_client, status):
     _, sessions, _ = booking_client
     secret = cipher()
     await add_connection(sessions, secret, business_id=1, phone_number_id="phone-a", status=status)
@@ -73,7 +73,11 @@ async def test_inactive_connection_never_falls_back_to_legacy(booking_client, st
     async with sessions() as session:
         sender = WhatsAppSender(
             session,
-            Settings(_env_file=None, whatsapp_legacy_business_id=1),
+            Settings(
+                _env_file=None,
+                whatsapp_access_token="legacy-token",
+                whatsapp_phone_number_id="123456",
+            ),
             resolver=WhatsAppConnectionResolver(session, cipher=secret),
             client_factory=lambda *args, **kwargs: RecordingClient(calls, **kwargs),
         )
@@ -83,28 +87,27 @@ async def test_inactive_connection_never_falls_back_to_legacy(booking_client, st
     assert calls == []
 
 
-async def test_global_legacy_sender_is_limited_to_explicit_business(booking_client):
+async def test_sender_rejects_missing_connection_even_when_legacy_globals_exist(booking_client):
     _, sessions, _ = booking_client
     calls = []
     config = Settings(
         _env_file=None,
-        whatsapp_legacy_business_id=1,
         whatsapp_access_token="legacy-token",
         whatsapp_phone_number_id="legacy-phone",
         whatsapp_api_version="v99.0",
     )
 
     def factory(*args, **kwargs):
-        assert args == (config,)
-        return RecordingClient(calls, legacy=True)
+        return RecordingClient(calls, **kwargs)
 
     async with sessions() as session:
         sender = WhatsAppSender(session, config, client_factory=factory)
-        await sender.send_for_business(1, "+15555550101", "legacy")
+        with pytest.raises(WhatsAppSendError):
+            await sender.send_for_business(1, "+15555550101", "must-not-send")
         with pytest.raises(WhatsAppSendError):
             await sender.send_for_business(2, "+15555550102", "must-not-send")
 
-    assert calls == [({"legacy": True}, "+15555550101", "legacy")]
+    assert calls == []
 
 
 async def test_reminder_adapter_preserves_business_identity(booking_client):

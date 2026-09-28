@@ -1,13 +1,10 @@
 from sqlalchemy import select
-from app.models import Business, InboundMessage
+from app.models import InboundMessage
 
 
 class InboundMessageRepository:
     def __init__(self, session):
         self.session = session
-
-    async def business_ids(self, phone):
-        return list(await self.session.scalars(select(Business.id).where(Business.phone_number == phone)))
 
     async def find(self, business_id, external_message_id):
         return await self.session.scalar(select(InboundMessage).where(

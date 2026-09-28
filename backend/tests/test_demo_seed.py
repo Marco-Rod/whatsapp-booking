@@ -1,5 +1,4 @@
 from datetime import date, datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -75,7 +74,11 @@ async def test_fixtures_never_due_and_sender_rejects_before_network(sessions):
     async with sessions() as session:
         assert await ReminderService(session).find_due(datetime(2026, 9, 18, 14, tzinfo=timezone.utc)) == []
     with pytest.raises(WhatsAppSendError, match="Fictional"):
-        await WhatsAppClient(SimpleNamespace()).send_text("demo:bella:mariana", "hola")
+        await WhatsAppClient(
+            access_token="test-token",
+            phone_number_id="123456",
+            api_version="v99.0",
+        ).send_text("demo:bella:mariana", "hola")
 
 
 def test_date_parser():

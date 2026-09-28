@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     whatsapp_access_token: SecretStr = SecretStr("")
     whatsapp_phone_number_id: str = ""
     whatsapp_waba_id: str = ""
-    whatsapp_legacy_business_id: int | None = Field(default=None, gt=0)
     whatsapp_api_version: str = ""
     meta_app_secret: SecretStr = SecretStr("")
 

@@ -20,7 +20,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import Session, engine
 from app.models import Appointment, Business, Conversation, Customer, InboundMessage
+from app.models import WhatsAppConnectionStatus
 from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
+from app.services.whatsapp_connection_resolver import WhatsAppRoutingIdentity
 from app.services.whatsapp.webhook import WebhookService
 
 TEST_PHONE = "+15555550199"
@@ -30,8 +32,26 @@ class LocalReplies:
     def __init__(self):
         self.messages = []
 
-    async def send_text(self, phone, text):
+    async def send_for_business(self, business_id, phone, text):
         self.messages.append(text)
+
+
+class LocalRoutingResolver:
+    """Script-only deterministic route; production routing remains persisted."""
+
+    def __init__(self, business_id: int, phone_number_id: str):
+        self.business_id = business_id
+        self.phone_number_id = phone_number_id
+
+    async def find_routing_identity(self, phone_number_id):
+        if phone_number_id != self.phone_number_id:
+            return None
+        return WhatsAppRoutingIdentity(
+            connection_id=0,
+            business_id=self.business_id,
+            phone_number_id=self.phone_number_id,
+            status=WhatsAppConnectionStatus.CONNECTED.value,
+        )
 
 
 class ObservedClient:
@@ -73,11 +93,10 @@ async def run(business_id: int):
             Customer.business_id == business.id, Customer.phone == TEST_PHONE))
         if existing is not None or customer_exists is not None:
             raise RuntimeError("Test phone already used; inspect the previous E2E before another run")
-        if not business.phone_number:
-            raise RuntimeError("Business needs a receiving phone configured")
-        business_id, business_phone = business.id, business.phone_number
+        business_id = business.id
 
-    config = settings.model_copy(update={"whatsapp_phone_number_id": "calendar-e2e-local"})
+    phone_number_id = "calendar-e2e-local"
+    config = settings
     sender = LocalReplies()
     counter = {"create": 0}
     run_id = uuid4().hex
@@ -87,8 +106,8 @@ async def run(business_id: int):
         nonlocal counter
         counter += 1
         return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
-            "metadata": {"phone_number_id": config.whatsapp_phone_number_id,
-                         "display_phone_number": business_phone},
+            "metadata": {"phone_number_id": phone_number_id,
+                         "display_phone_number": "calendar-e2e-local"},
             "messages": [{"from": TEST_PHONE, "id": f"calendar-e2e.{run_id}.{counter}",
                           "type": "text", "text": {"body": text}}],
         }}]}]}
@@ -104,6 +123,10 @@ async def run(business_id: int):
                 sender,
                 config,
                 calendar_resolver=resolver,
+                whatsapp_connection_resolver=LocalRoutingResolver(
+                    business_id,
+                    phone_number_id,
+                ),
             ).process(data)
 
     async def conversation():

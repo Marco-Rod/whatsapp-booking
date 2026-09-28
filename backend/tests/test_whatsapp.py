@@ -6,6 +6,7 @@ from unittest.mock import ANY, AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 
 from test_booking import booking_client
@@ -22,10 +23,13 @@ from app.models import (
     Conversation,
     GoogleCalendarConnection,
     InboundMessage,
+    WhatsAppConnectionStatus,
 )
 from app.services.conversation.engine import ConversationEngine
 from app.services.whatsapp.webhook import WebhookService
 from app.services.whatsapp_sender import WhatsAppSender
+from app.services.whatsapp_connection_resolver import WhatsAppConnectionResolver
+from app.security.credentials import CredentialCipher
 from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
 from app.integrations.google_calendar.errors import GoogleCalendarError
 
@@ -41,8 +45,8 @@ def envelope(text="hola", message_id="wamid.test"):
 @pytest_asyncio.fixture
 async def webhook(booking_client, monkeypatch):
     client, sessions, postgres = booking_client
-    config = Settings(_env_file=None, whatsapp_verify_token="test-verify", whatsapp_access_token="test-token",
-                      whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0", meta_app_secret="test-app-secret")
+    config = Settings(_env_file=None, whatsapp_verify_token="test-verify",
+                      whatsapp_api_version="v99.0", meta_app_secret="test-app-secret")
     sender = AsyncMock(spec=WhatsAppSender)
     calls = []
     fault = {"after_engine": False}
@@ -64,6 +68,18 @@ async def webhook(booking_client, monkeypatch):
     async with sessions.begin() as session:
         business = await session.get(Business, 1)
         business.phone_number = "+523300000001"
+        session.add(
+            WhatsAppConnectionResolver(
+                session,
+                cipher=CredentialCipher(Fernet.generate_key().decode("utf-8")),
+            ).create_connection(
+                business_id=1,
+                waba_id="test-waba",
+                phone_number_id="123456",
+                access_token="test-token",
+                status=WhatsAppConnectionStatus.CONNECTED,
+            )
+        )
 
     async def processing_session():
         async with sessions() as session:
@@ -212,13 +228,13 @@ async def test_batch_retry_preserves_processed_messages(webhook):
     assert sender.send_for_business.await_count == 2
 
 
-async def test_unmapped_business_is_not_hardcoded(webhook):
+async def test_display_phone_number_never_decides_persisted_business_routing(webhook):
     client, _, sender, calls, _, _ = webhook
     payload = envelope()
     payload["entry"][0]["changes"][0]["value"]["metadata"]["display_phone_number"] = "523300000099"
-    assert (await client.post(URL, json=payload)).status_code == 503
-    assert calls == []
-    sender.send_for_business.assert_not_awaited()
+    assert (await client.post(URL, json=payload)).status_code == 200
+    assert calls == ["hola"]
+    sender.send_for_business.assert_awaited_once_with(1, "+523312345678", ANY)
 
 
 async def test_engine_failure_rolls_back_inbound_and_booking(webhook):
@@ -271,16 +287,11 @@ async def test_graph_client_contract(phone, expected_recipient):
             json={"messages": [{"id": "wamid.reply"}]},
         )
 
-    config = Settings(
-        _env_file=None,
-        whatsapp_access_token="test-token",
-        whatsapp_phone_number_id="123456",
-        whatsapp_api_version="v99.0",
-    )
-
     await WhatsAppClient(
-        config,
-        httpx.MockTransport(respond),
+        access_token="test-token",
+        phone_number_id="123456",
+        api_version="v99.0",
+        transport=httpx.MockTransport(respond),
     ).send_text(phone, "Hola")
 
     assert str(requests[0].url) == (
@@ -299,11 +310,14 @@ async def test_graph_client_contract(phone, expected_recipient):
 
 
 async def test_graph_client_sanitizes_provider_error():
-    config = Settings(_env_file=None, whatsapp_access_token="test-token",
-                      whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0")
     transport = httpx.MockTransport(lambda request: httpx.Response(401, json={"error":"sensitive-provider-content"}))
     with pytest.raises(WhatsAppSendError) as error:
-        await WhatsAppClient(config, transport).send_text("+523312345678", "Hola")
+        await WhatsAppClient(
+            access_token="test-token",
+            phone_number_id="123456",
+            api_version="v99.0",
+            transport=transport,
+        ).send_text("+523312345678", "Hola")
     assert "test-token" not in str(error.value)
     assert "sensitive" not in str(error.value)
 

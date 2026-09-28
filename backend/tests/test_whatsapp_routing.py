@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from test_booking import booking_client  # noqa: F401
 
 from app.core.config import Settings
-from app.models import Business, InboundMessage, WhatsAppConnectionStatus
+from app.models import InboundMessage, WhatsAppConnectionStatus
 from app.security.credentials import CredentialCipher
 from app.services.conversation.result import ConversationResult
 from app.services.whatsapp.webhook import WebhookService
@@ -63,10 +63,7 @@ def routing_cipher() -> CredentialCipher:
 
 
 def settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        whatsapp_phone_number_id="legacy-phone",
-    )
+    return Settings(_env_file=None)
 
 
 async def add_connection(
@@ -178,7 +175,7 @@ async def test_each_persisted_phone_number_routes_to_its_own_business(
     second_sender.send_for_business.assert_awaited_once_with(2, "+523312345678", "respuesta")
 
 
-async def test_persisted_connection_takes_priority_over_legacy_phone_id(
+async def test_persisted_connection_routes_its_configured_phone_id(
     booking_client,
 ):
     _, sessions, _ = booking_client
@@ -210,7 +207,7 @@ async def test_persisted_connection_takes_priority_over_legacy_phone_id(
         WhatsAppConnectionStatus.ERROR,
     ],
 )
-async def test_inactive_persisted_connection_cannot_fall_back_to_legacy(
+async def test_inactive_persisted_connection_does_not_route(
     booking_client,
     status,
 ):
@@ -256,30 +253,6 @@ async def test_unknown_phone_number_does_not_route_from_display_number(
     sender.send_for_business.assert_not_awaited()
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(InboundMessage)) == 0
-
-
-async def test_legacy_phone_preserves_display_number_routing(
-    booking_client,
-):
-    _, sessions, _ = booking_client
-    # The legacy bridge is intentionally the only path that still reads this
-    # display number from Business.phone_number.
-    async with sessions.begin() as session:
-        business = await session.get(Business, 1)
-        assert business is not None
-        business.phone_number = "+523300000001"
-
-    engine, sender = await process(
-        sessions,
-        routing_cipher(),
-        payload(
-            phone_number_id="legacy-phone",
-            display_phone_number="+523300000001",
-        ),
-    )
-
-    assert engine.business_ids == [1]
-    sender.send_for_business.assert_awaited_once_with(1, "+523312345678", "respuesta")
 
 
 async def test_idempotency_remains_scoped_to_routed_business(
