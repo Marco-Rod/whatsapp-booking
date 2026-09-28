@@ -1,4 +1,5 @@
 from datetime import datetime, time
+from enum import Enum
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Time, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -36,6 +37,11 @@ class Business(Timestamps, Base):
         cascade="all, delete-orphan",
     )
     google_calendar_connection: Mapped["GoogleCalendarConnection | None"] = relationship(
+        back_populates="business",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    whatsapp_connection: Mapped["WhatsAppConnection | None"] = relationship(
         back_populates="business",
         uselist=False,
         cascade="all, delete-orphan",
@@ -126,6 +132,76 @@ class GoogleCalendarConnection(Timestamps, Base):
 
     business: Mapped["Business"] = relationship(
         back_populates="google_calendar_connection",
+    )
+
+
+class WhatsAppConnectionStatus(str, Enum):
+    PENDING = "pending"
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    ERROR = "error"
+
+
+class WhatsAppConnection(Timestamps, Base):
+    __tablename__ = "whatsapp_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id",
+            name="uq_whatsapp_connection_business",
+        ),
+        UniqueConstraint(
+            "phone_number_id",
+            name="uq_whatsapp_connection_phone_number_id",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'connected', 'disconnected', 'error')",
+            name="ck_whatsapp_connection_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    waba_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone_number_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+    display_phone_number: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
+    encrypted_access_token: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    granted_scopes: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        default=list,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default=WhatsAppConnectionStatus.PENDING.value,
+        nullable=False,
+    )
+    connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    disconnected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    business: Mapped["Business"] = relationship(
+        back_populates="whatsapp_connection",
     )
 
 
