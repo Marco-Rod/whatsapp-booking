@@ -7,7 +7,9 @@ from sqlalchemy import func, select
 from test_booking import booking_client  # noqa: F401
 
 from app.api.v1 import google_admin_auth
-from app.core.config import settings
+from app.core.config import Settings, settings
+from app.core.database import get_session
+from app.main import app
 from app.models import Business, BusinessUser
 from app.security.admin_sessions import AdminSessionManager
 from app.security.admin_tokens import hash_admin_token
@@ -23,6 +25,7 @@ ONBOARDING_URL = "/api/v1/onboarding/status"
 ADMIN_TOKEN = "bella-admin-token"
 GOOGLE_CREDENTIAL = "google-id-token-value"
 SESSION_SECRET = "google-admin-api-session-secret"
+AUTH_BODY_LIMIT = 32
 
 
 def configure_session_cookie(*, secure=False, samesite="lax"):
@@ -55,6 +58,86 @@ def use_google_verifier(monkeypatch, *, result=None, error=None):
     return verifier
 
 
+def install_body_limit(monkeypatch):
+    config = settings.model_copy(
+        update={"google_admin_auth_max_body_bytes": AUTH_BODY_LIMIT},
+    )
+    app.dependency_overrides[
+        google_admin_auth.get_google_admin_auth_settings
+    ] = lambda: config
+
+    session_calls = 0
+
+    async def tracked_session():
+        nonlocal session_calls
+        session_calls += 1
+        yield object()
+
+    previous_session_override = app.dependency_overrides.get(get_session)
+    app.dependency_overrides[get_session] = tracked_session
+
+    def cleanup():
+        app.dependency_overrides.pop(
+            google_admin_auth.get_google_admin_auth_settings,
+            None,
+        )
+        if previous_session_override is None:
+            app.dependency_overrides.pop(get_session, None)
+        else:
+            app.dependency_overrides[get_session] = previous_session_override
+
+    return lambda: session_calls, cleanup
+
+
+async def post_without_content_length(path, chunks, headers=None, *, disconnect=False):
+    messages = [
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": disconnect or index < len(chunks) - 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    sent = []
+
+    async def receive():
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": headers or [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+        send,
+    )
+    return next(
+        message["status"]
+        for message in sent
+        if message["type"] == "http.response.start"
+    )
+
+
+def test_google_admin_auth_body_limit_must_be_positive():
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, google_admin_auth_max_body_bytes=0)
+
+
 async def enable_admin(sessions, business_id=1, token=ADMIN_TOKEN):
     async with sessions.begin() as session:
         business = await session.get(Business, business_id)
@@ -72,6 +155,117 @@ async def add_linked_user(sessions, business_id=1):
                 provider_subject="google-subject-1",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("path", "headers"),
+    [
+        (SESSION_URL, {}),
+        (LINK_URL, {"Authorization": "Bearer bootstrap-token"}),
+    ],
+)
+async def test_google_auth_content_length_over_limit_rejects_before_verifier_or_session(
+    booking_client,
+    monkeypatch,
+    path,
+    headers,
+):
+    client, _, _ = booking_client
+    session_calls, cleanup = install_body_limit(monkeypatch)
+    verifier = use_google_verifier(monkeypatch)
+    try:
+        response = await client.post(
+            path,
+            content=b"x" * (AUTH_BODY_LIMIT + 1),
+            headers=headers,
+        )
+        assert response.status_code == 413
+        verifier.verify.assert_not_awaited()
+        assert session_calls() == 0
+    finally:
+        cleanup()
+
+
+@pytest.mark.parametrize(
+    ("path", "headers"),
+    [
+        (SESSION_URL, []),
+        (LINK_URL, [(b"authorization", b"Bearer bootstrap-token")]),
+    ],
+)
+async def test_google_auth_chunked_body_over_limit_rejects_before_verifier_or_session(
+    booking_client,
+    monkeypatch,
+    path,
+    headers,
+):
+    _, _, _ = booking_client
+    session_calls, cleanup = install_body_limit(monkeypatch)
+    verifier = use_google_verifier(monkeypatch)
+    try:
+        status = await post_without_content_length(
+            path,
+            [b"x" * AUTH_BODY_LIMIT, b"x"],
+            headers=headers,
+        )
+        assert status == 413
+        verifier.verify.assert_not_awaited()
+        assert session_calls() == 0
+    finally:
+        cleanup()
+
+
+async def test_google_auth_invalid_body_preserves_422_before_verifier_or_session(
+    booking_client,
+    monkeypatch,
+):
+    client, _, _ = booking_client
+    session_calls, cleanup = install_body_limit(monkeypatch)
+    verifier = use_google_verifier(monkeypatch)
+    try:
+        response = await client.post(SESSION_URL, json={})
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["loc"] == ["body", "credential"]
+        verifier.verify.assert_not_awaited()
+        assert session_calls() == 0
+    finally:
+        cleanup()
+
+
+async def test_google_auth_body_at_limit_reaches_validation_before_session(
+    booking_client,
+    monkeypatch,
+):
+    client, _, _ = booking_client
+    session_calls, cleanup = install_body_limit(monkeypatch)
+    verifier = use_google_verifier(monkeypatch)
+    try:
+        response = await client.post(SESSION_URL, content=b"x" * AUTH_BODY_LIMIT)
+        assert response.status_code == 422
+        verifier.verify.assert_not_awaited()
+        assert session_calls() == 0
+    finally:
+        cleanup()
+
+
+async def test_google_auth_interrupted_body_rejects_before_verifier_or_session(
+    booking_client,
+    monkeypatch,
+):
+    _, _, _ = booking_client
+    session_calls, cleanup = install_body_limit(monkeypatch)
+    verifier = use_google_verifier(monkeypatch)
+    try:
+        status = await post_without_content_length(
+            SESSION_URL,
+            [b'{"credential":"partial'],
+            disconnect=True,
+        )
+        assert status == 400
+        verifier.verify.assert_not_awaited()
+        assert session_calls() == 0
+    finally:
+        cleanup()
 
 
 async def test_google_link_creates_user_and_session_cookie(

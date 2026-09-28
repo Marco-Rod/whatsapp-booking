@@ -6,6 +6,13 @@ whatsapp-booking-mvp.duckdns.org {
     request_body @whatsapp_webhook_post {
         max_size 1MiB
     }
+    @google_admin_auth_post {
+        method POST
+        path /api/v1/admin/google/session /api/v1/admin/google/link
+    }
+    request_body @google_admin_auth_post {
+        max_size 32KiB
+    }
 
     reverse_proxy api:8000
 }

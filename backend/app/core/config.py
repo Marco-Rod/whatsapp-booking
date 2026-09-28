@@ -13,6 +13,10 @@ class Settings(BaseSettings):
         default=1_048_576,
         gt=0,
     )
+    google_admin_auth_max_body_bytes: int = Field(
+        default=32_768,
+        gt=0,
+    )
     api_docs_enabled: bool = True
 
     whatsapp_verify_token: SecretStr = SecretStr("")

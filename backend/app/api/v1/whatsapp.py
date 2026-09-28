@@ -8,6 +8,7 @@ from starlette.requests import ClientDisconnect
 
 from app.core.config import settings
 from app.core.database import get_session
+from app.core.request_body import read_bounded_request_body
 from app.integrations.whatsapp.client import WhatsAppClient, WhatsAppConfigurationError, WhatsAppSendError
 from app.integrations.whatsapp.signature import verify_webhook_signature
 from app.services.calendar_resolver import CalendarClientResolver
@@ -38,30 +39,11 @@ def create_webhook_service(session: AsyncSession, config):
 
 
 async def read_webhook_body(request: Request, maximum_bytes: int) -> bytes:
-    """Read a request body without buffering more than the configured maximum."""
-    declared_length = request.headers.get("content-length")
-    if declared_length is not None:
-        try:
-            if int(declared_length) > maximum_bytes:
-                raise HTTPException(
-                    status_code=413,
-                    detail="Webhook payload too large",
-                )
-        except ValueError:
-            # Missing or malformed Content-Length is not trusted; stream instead.
-            pass
-
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > maximum_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail="Webhook payload too large",
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+    return await read_bounded_request_body(
+        request,
+        maximum_bytes,
+        too_large_detail="Webhook payload too large",
+    )
 
 
 async def process_signed_webhook(payload: dict, config) -> None:
