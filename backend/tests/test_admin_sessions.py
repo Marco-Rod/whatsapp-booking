@@ -1,5 +1,6 @@
-from pydantic import SecretStr
 import pytest
+from fastapi import Response
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from test_booking import booking_client  # noqa: F401
@@ -13,6 +14,7 @@ from app.security.admin_sessions import (
     AdminSessionManager,
     authenticate_admin_session,
 )
+from app.security.admin_session_cookie import issue_admin_session_cookie
 from app.security.admin_tokens import hash_admin_token
 
 
@@ -38,10 +40,15 @@ async def enable_admin(sessions, business_id=1, token="admin-token"):
 async def login(client, sessions, *, business_id=1, token="admin-token"):
     configure_sessions()
     await enable_admin(sessions, business_id, token)
-    return await client.post(
-        SESSION_URL,
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    manager = AdminSessionManager(secret=SESSION_SECRET)
+    async with sessions() as session:
+        business = await session.get(Business, business_id)
+        cookie = manager.create(
+            business_id=business.id,
+            admin_token_hash=business.admin_token_hash,
+        )
+    client.cookies.set("admin_session", cookie, domain="test.local", path="/")
+    return cookie
 
 
 def test_admin_session_round_trip(monkeypatch):
@@ -91,13 +98,15 @@ def test_tampered_admin_session_is_rejected():
         manager.verify(f"{token[:-1]}{replacement}")
 
 
-async def test_login_sets_httponly_session_cookie(booking_client):
-    client, sessions, _ = booking_client
+async def test_issue_session_cookie_sets_httponly_attributes(booking_client):
+    _, sessions, _ = booking_client
+    configure_sessions()
+    await enable_admin(sessions)
+    async with sessions() as session:
+        business = await session.get(Business, 1)
+        response = Response()
+        issue_admin_session_cookie(response, business)
 
-    response = await login(client, sessions)
-
-    assert response.status_code == 200
-    assert response.json() == {"authenticated": True}
     cookie = response.headers["set-cookie"]
     assert cookie.startswith("admin_session=")
     assert "HttpOnly" in cookie
@@ -106,34 +115,20 @@ async def test_login_sets_httponly_session_cookie(booking_client):
     assert "Secure" not in cookie
 
 
-async def test_login_rejects_invalid_token_without_cookie(
-    booking_client,
-):
-    client, sessions, _ = booking_client
-    configure_sessions()
-    await enable_admin(sessions)
+async def test_legacy_admin_session_post_is_not_exposed(booking_client):
+    response = await booking_client[0].post(SESSION_URL)
 
-    response = await client.post(
-        SESSION_URL,
-        headers={"Authorization": "Bearer wrong-token"},
-    )
-
-    assert response.status_code == 401
-    assert response.json() == {
-        "detail": "Invalid business admin credentials"
-    }
-    assert "set-cookie" not in response.headers
+    assert response.status_code == 404
 
 
 async def test_valid_cookie_resolves_only_its_business(booking_client):
     client, sessions, _ = booking_client
-    response = await login(
+    await login(
         client,
         sessions,
         business_id=2,
         token="second-admin-token",
     )
-    assert response.status_code == 200
 
     status = await client.get(ONBOARDING_URL)
 
@@ -235,14 +230,11 @@ async def test_secure_cookie_is_enabled_by_configuration(
     client, sessions, _ = booking_client
     configure_sessions(secure=True)
     settings.admin_session_cookie_samesite = "none"
-    token = await enable_admin(sessions)
-
-    response = await client.post(
-        SESSION_URL,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 200
+    await enable_admin(sessions)
+    async with sessions() as session:
+        business = await session.get(Business, 1)
+        response = Response()
+        issue_admin_session_cookie(response, business)
     cookie = response.headers["set-cookie"]
     assert "Secure" in cookie
     assert "SameSite=none" in cookie

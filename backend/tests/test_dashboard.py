@@ -7,6 +7,7 @@ from sqlalchemy import event
 from test_booking import booking_client
 from app.models import Appointment, AppointmentReminder, Business, Customer
 from app.core.config import settings
+from app.security.admin_sessions import AdminSessionManager
 from app.security.admin_tokens import hash_admin_token
 
 
@@ -31,11 +32,11 @@ async def login_business(client, sessions, *, business_id=1):
         business = await session.get(Business, business_id)
         business.admin_token_hash = hash_admin_token(token)
 
-    response = await client.post(
-        "/api/v1/admin/session",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
+    manager = AdminSessionManager(secret="test-admin-session-secret")
+    client.cookies.set("admin_session", manager.create(
+        business_id=business_id,
+        admin_token_hash=hash_admin_token(token),
+    ))
     return {}
 
 

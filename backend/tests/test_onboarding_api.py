@@ -8,6 +8,7 @@ from test_booking import booking_client  # noqa: F401
 
 from app.models import Business, BusinessHours, Service
 from app.security.admin_tokens import hash_admin_token
+from app.security.admin_sessions import AdminSessionManager
 from app.core.config import settings
 
 
@@ -34,11 +35,12 @@ async def authorize_business(
 
 async def login_business(client, sessions, **kwargs):
     token = await authorize_business(sessions, **kwargs)
-    response = await client.post(
-        "/api/v1/admin/session",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
+    business_id = kwargs.get("business_id", 1)
+    manager = AdminSessionManager(secret="test-admin-session-secret")
+    client.cookies.set("admin_session", manager.create(
+        business_id=business_id,
+        admin_token_hash=hash_admin_token(token),
+    ))
     return {}
 
 

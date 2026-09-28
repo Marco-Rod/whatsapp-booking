@@ -15,6 +15,7 @@ from app.core.config import Settings, settings
 from app.integrations.google_calendar.oauth import GoogleOAuthExchangeError
 from app.models import Appointment, Business, GoogleCalendarConnection
 from app.security.admin_tokens import hash_admin_token
+from app.security.admin_sessions import AdminSessionManager
 from app.security.credentials import CredentialCipher
 from app.security.oauth_state import OAuthStateError
 
@@ -57,13 +58,13 @@ async def authenticated_google_integration_client(booking_client):
             "google-integrations-admin-token"
         )
 
-    response = await client.post(
-        "/api/v1/admin/session",
-        headers={
-            "Authorization": "Bearer google-integrations-admin-token"
-        },
+    manager = AdminSessionManager(
+        secret="test-google-integrations-session-secret"
     )
-    assert response.status_code == 200
+    client.cookies.set("admin_session", manager.create(
+        business_id=1,
+        admin_token_hash=hash_admin_token("google-integrations-admin-token"),
+    ))
 
 
 @pytest.mark.parametrize(
