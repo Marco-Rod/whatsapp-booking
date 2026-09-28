@@ -142,7 +142,7 @@ async def test_persisted_phone_number_routes_to_its_business_only(
     )
 
     assert engine.business_ids == [1]
-    sender.send_text.assert_awaited_once()
+    sender.send_for_business.assert_awaited_once_with(1, "+523312345678", "respuesta")
     async with sessions() as session:
         inbound = await session.scalar(select(InboundMessage))
         assert inbound is not None
@@ -157,12 +157,12 @@ async def test_each_persisted_phone_number_routes_to_its_own_business(
     await add_connection(sessions, cipher, business_id=1, phone_number_id="phone-a")
     await add_connection(sessions, cipher, business_id=2, phone_number_id="phone-b")
 
-    first, _ = await process(
+    first, first_sender = await process(
         sessions,
         cipher,
         payload(phone_number_id="phone-a", display_phone_number="+523300000002"),
     )
-    second, _ = await process(
+    second, second_sender = await process(
         sessions,
         cipher,
         payload(
@@ -174,6 +174,8 @@ async def test_each_persisted_phone_number_routes_to_its_own_business(
 
     assert first.business_ids == [1]
     assert second.business_ids == [2]
+    first_sender.send_for_business.assert_awaited_once_with(1, "+523312345678", "respuesta")
+    second_sender.send_for_business.assert_awaited_once_with(2, "+523312345678", "respuesta")
 
 
 async def test_persisted_connection_takes_priority_over_legacy_phone_id(
@@ -232,7 +234,7 @@ async def test_inactive_persisted_connection_cannot_fall_back_to_legacy(
     )
 
     assert engine.business_ids == []
-    sender.send_text.assert_not_awaited()
+    sender.send_for_business.assert_not_awaited()
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(InboundMessage)) == 0
 
@@ -251,7 +253,7 @@ async def test_unknown_phone_number_does_not_route_from_display_number(
     )
 
     assert engine.business_ids == []
-    sender.send_text.assert_not_awaited()
+    sender.send_for_business.assert_not_awaited()
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(InboundMessage)) == 0
 
@@ -277,7 +279,7 @@ async def test_legacy_phone_preserves_display_number_routing(
     )
 
     assert engine.business_ids == [1]
-    sender.send_text.assert_awaited_once()
+    sender.send_for_business.assert_awaited_once_with(1, "+523312345678", "respuesta")
 
 
 async def test_idempotency_remains_scoped_to_routed_business(

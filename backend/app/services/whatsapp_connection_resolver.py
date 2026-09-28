@@ -111,6 +111,20 @@ class WhatsAppConnectionResolver:
             status=connection.status,
         )
 
+    async def find_routing_identity_for_business(
+        self,
+        business_id: int,
+    ) -> WhatsAppRoutingIdentity | None:
+        connection = await self.repository.get_by_business_id(business_id)
+        if connection is None:
+            return None
+        return WhatsAppRoutingIdentity(
+            connection_id=connection.id,
+            business_id=connection.business_id,
+            phone_number_id=connection.phone_number_id,
+            status=connection.status,
+        )
+
     def _resolve_active(
         self,
         connection: WhatsAppConnection | None,

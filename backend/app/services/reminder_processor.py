@@ -55,10 +55,10 @@ class ReminderProcessor:
             delivery = await self._claim(reminder.id, token, now)
             if delivery is None:
                 continue
-            phone, message = delivery
+            business_id, phone, message = delivery
             # No session/transaction is open during this external call.
             try:
-                await self.sender.send(phone=phone, message=message)
+                await self.sender.send_for_business(business_id, phone, message)
             except ReminderSendError:
                 await self._finish(reminder.id, token, sent_at=None)
                 logger.warning("Reminder %s was not acknowledged; remains pending", reminder.id)
@@ -70,7 +70,7 @@ class ReminderProcessor:
             sent += 1
         return ReminderProcessingResult(sent=sent, failed=failed)
 
-    async def _claim(self, reminder_id: int, token: str, now: datetime) -> tuple[str, str] | None:
+    async def _claim(self, reminder_id: int, token: str, now: datetime) -> tuple[int, str, str] | None:
         async with self.sessions.begin() as session:
             claimed = await session.scalar(
                 update(AppointmentReminder).where(
@@ -95,7 +95,7 @@ class ReminderProcessor:
                 or customer.business_id != business.id or service.business_id != business.id):
                 reminder.claim_token = None
                 return None
-            return customer.phone, format_reminder(
+            return business.id, customer.phone, format_reminder(
                 service_name=service.name, starts_at=appointment.starts_at, business_timezone=business.timezone,
             )
 

@@ -59,11 +59,11 @@ async def test_delayed_cycle_continues_after_individual_failure(reminder_booking
     class Sender(FakeSender):
         attempts = 0
 
-        async def send(self, **kwargs):
+        async def send_for_business(self, business_id, phone, message):
             self.attempts += 1
             if self.attempts == 1:
                 raise ReminderSendError("offline")
-            await super().send(**kwargs)
+            await super().send_for_business(business_id, phone, message)
 
     sender = Sender()
     late = NOW + timedelta(minutes=5)

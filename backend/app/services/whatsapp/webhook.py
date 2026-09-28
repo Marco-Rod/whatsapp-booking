@@ -37,10 +37,10 @@ def verify_webhook(config, mode, token, challenge):
 
 
 class WebhookService:
-    def __init__(self, session, client, config, engine=None, calendar_resolver=None,
+    def __init__(self, session, sender, config, engine=None, calendar_resolver=None,
                  whatsapp_connection_resolver=None):
         self.session = session
-        self.client = client
+        self.sender = sender
         self.config = config
         self.repository = InboundMessageRepository(session)
         self.engine = engine or ConversationEngine(session)
@@ -162,5 +162,9 @@ class WebhookService:
                 index = data["sent_count"]
                 if index >= len(data["responses"]):
                     return
-                await self.client.send_text(inbound.phone, data["responses"][index])
+                await self.sender.send_for_business(
+                    inbound.business_id,
+                    inbound.phone,
+                    data["responses"][index],
+                )
                 inbound.payload = {**data, "sent_count": index + 1}

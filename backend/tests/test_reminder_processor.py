@@ -10,8 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from test_booking import booking_client
 from app.core.config import Settings
-from app.integrations.whatsapp.client import WhatsAppClient
-from app.integrations.whatsapp.reminder_sender import WhatsAppReminderSender
 from app.models import Appointment, AppointmentReminder, Customer
 from app.services.reminder_processor import ReminderProcessor, format_reminder
 from app.services.reminder_sender import ReminderSendError
@@ -25,10 +23,10 @@ class FakeSender:
         self.messages = []
         self.error = None
 
-    async def send(self, **kwargs):
+    async def send_for_business(self, business_id, phone, message):
         if self.error:
             raise self.error
-        self.messages.append(kwargs)
+        self.messages.append({"business_id": business_id, "phone": phone, "message": message})
 
 
 @pytest_asyncio.fixture
@@ -64,11 +62,11 @@ async def test_ack_sets_sent_at_and_two_more_runs_send_nothing(reminder_booking)
     tracked = async_sessionmaker(sessions.kw["bind"], class_=TrackedSession, expire_on_commit=False)
 
     class Sender(FakeSender):
-        async def send(self, **kwargs):
+        async def send_for_business(self, business_id, phone, message):
             assert not any(session.in_transaction() for session in observed)
             pending = await reminder(sessions)
             assert pending.claim_token and pending.sent_at is None
-            await super().send(**kwargs)
+            await super().send_for_business(business_id, phone, message)
 
     sender = Sender()
     processor = ReminderProcessor(tracked, sender)
@@ -77,7 +75,7 @@ async def test_ack_sets_sent_at_and_two_more_runs_send_nothing(reminder_booking)
     assert await processor.process_due_reminders(NOW + timedelta(minutes=1)) == 0
     record = await reminder(sessions)
     assert record.sent_at == NOW and record.claim_token is None
-    assert sender.messages == [{"phone": "+15555550199", "message":
+    assert sender.messages == [{"business_id": 1, "phone": "+15555550199", "message":
         "⏰ Recordatorio de tu cita\n\nCut\n18 de septiembre a las 4:00 PM.\n\n"
         "Si necesitas hacer un cambio, responde a este mensaje."}]
 
@@ -139,8 +137,8 @@ async def test_concurrent_processors_only_one_send(reminder_booking):
     release = asyncio.Event()
 
     class BlockingSender(FakeSender):
-        async def send(self, **kwargs):
-            await super().send(**kwargs)
+        async def send_for_business(self, business_id, phone, message):
+            await super().send_for_business(business_id, phone, message)
             entered.set()
             await release.wait()
 
@@ -204,37 +202,9 @@ def test_formatter_uses_local_day_and_twelve_hour_clock(utc, zone, expected):
                                       business_timezone=zone)
 
 
-@pytest.mark.parametrize("ack", [True, False])
-async def test_whatsapp_adapter_acknowledgement_controls_sent_at(reminder_booking, ack):
-    sessions, _, _ = reminder_booking
-    requests = []
-
-    def response(request):
-        requests.append(request)
-        return httpx.Response(200, json={"messages": [{"id": "wamid.reminder"}]} if ack else {})
-
-    config = Settings(_env_file=None, whatsapp_access_token="test", whatsapp_phone_number_id="123",
-                      whatsapp_api_version="v99.0")
-    sender = WhatsAppReminderSender(WhatsAppClient(config, httpx.MockTransport(response)))
-    assert await ReminderProcessor(sessions, sender).process_due_reminders(NOW) == int(ack)
-    assert len(requests) == 1
-    assert (await reminder(sessions)).sent_at == (NOW if ack else None)
-
-
 async def test_appointment_filter_does_not_send_other_bookings(reminder_booking):
     sessions, appointment_id, _ = reminder_booking
     sender = FakeSender()
     assert await ReminderProcessor(sessions, sender).process_due_reminders(
         NOW, appointment_id=appointment_id + 1000) == 0
     assert sender.messages == []
-
-
-@pytest.mark.parametrize("phone,destination", [
-    ("+525512345678", "+525512345678"),
-    ("+5215512345678", "+5215512345678"),
-    ("+15555550199", "+15555550199"),
-])
-async def test_adapter_preserves_configured_recipient(phone, destination):
-    client = AsyncMock(spec=WhatsAppClient)
-    await WhatsAppReminderSender(client).send(phone=phone, message="Reminder")
-    client.send_text.assert_awaited_once_with(destination, "Reminder")

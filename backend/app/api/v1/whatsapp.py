@@ -9,10 +9,11 @@ from starlette.requests import ClientDisconnect
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.request_body import read_bounded_request_body
-from app.integrations.whatsapp.client import WhatsAppClient, WhatsAppConfigurationError, WhatsAppSendError
+from app.integrations.whatsapp.client import WhatsAppConfigurationError, WhatsAppSendError
 from app.integrations.whatsapp.signature import verify_webhook_signature
 from app.services.calendar_resolver import CalendarClientResolver
 from app.services.whatsapp.webhook import WebhookService, verify_webhook
+from app.services.whatsapp_sender import WhatsAppSender
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def log_whatsapp_configuration_error(error: WhatsAppConfigurationError) -> None:
 def create_webhook_service(session: AsyncSession, config):
     return WebhookService(
         session,
-        WhatsAppClient(config),
+        WhatsAppSender(session, config),
         config,
         calendar_resolver=CalendarClientResolver(session),
     )

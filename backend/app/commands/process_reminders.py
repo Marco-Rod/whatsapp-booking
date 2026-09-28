@@ -5,7 +5,6 @@ import sys
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.integrations.whatsapp.client import WhatsAppClient
 from app.integrations.whatsapp.reminder_sender import WhatsAppReminderSender
 from app.services.reminder_processor import ReminderProcessor, ReminderProcessingResult
 
@@ -17,7 +16,7 @@ async def run_once(appointment_id: int | None = None) -> ReminderProcessingResul
     engine = create_async_engine(config.database_url)
     try:
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        sender = WhatsAppReminderSender(WhatsAppClient(config))
+        sender = WhatsAppReminderSender(sessions, config)
         return await ReminderProcessor(sessions, sender).process_once(
             datetime.now(timezone.utc), appointment_id=appointment_id,
         )

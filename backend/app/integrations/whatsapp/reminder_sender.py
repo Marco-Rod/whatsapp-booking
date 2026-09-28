@@ -1,14 +1,21 @@
 from app.services.reminder_sender import ReminderSendError
 
-from .client import WhatsAppClient, WhatsAppConfigurationError, WhatsAppSendError
+from app.services.whatsapp_sender import WhatsAppSender
 
 
 class WhatsAppReminderSender:
-    def __init__(self, client: WhatsAppClient):
-        self.client = client
+    def __init__(self, sessions, config, *, sender_factory=WhatsAppSender):
+        self.sessions = sessions
+        self.config = config
+        self.sender_factory = sender_factory
 
-    async def send(self, *, phone: str, message: str) -> None:
+    async def send_for_business(self, business_id: int, phone: str, message: str) -> None:
         try:
-            await self.client.send_text(phone, message)
+            async with self.sessions() as session:
+                await self.sender_factory(session, self.config).send_for_business(
+                    business_id,
+                    phone,
+                    message,
+                )
         except (WhatsAppSendError, WhatsAppConfigurationError):
             raise ReminderSendError("WhatsApp did not acknowledge the reminder") from None

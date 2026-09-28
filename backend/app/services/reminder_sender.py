@@ -6,6 +6,11 @@ class ReminderSendError(Exception):
 
 
 class ReminderSender(Protocol):
-    async def send(self, *, phone: str, message: str) -> None:
+    async def send_for_business(
+        self,
+        business_id: int,
+        phone: str,
+        message: str,
+    ) -> None:
         """Return only after the provider acknowledges the message."""
         ...

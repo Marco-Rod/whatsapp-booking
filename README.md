@@ -117,7 +117,8 @@ valores reales.
 - **Base de datos y API:** `DATABASE_URL`, `SLOT_INTERVAL_MINUTES`,
   `CORS_ALLOWED_ORIGINS`, `FRONTEND_URL`.
 - **Meta / WhatsApp:** `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_ACCESS_TOKEN`,
-  `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION`, `META_APP_SECRET`.
+  `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION`, `META_APP_SECRET` y
+  `WHATSAPP_LEGACY_BUSINESS_ID`.
 - **Google:** `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
   `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_IDENTITY_CLIENT_ID`.
 - **Seguridad:** `CREDENTIAL_ENCRYPTION_KEY`, `ADMIN_SESSION_SECRET`,
@@ -169,6 +170,16 @@ actual); no existe un worker Celery persistente.
 
 La configuración de producción vive fuera del repositorio y aporta los secretos
 de Meta, Google, cifrado y sesión administrativa.
+
+### Puente temporal de WhatsApp
+
+Antes de desplegar A3, configura `WHATSAPP_LEGACY_BUSINESS_ID` en el entorno
+de producción con el identificador del negocio que actualmente posee las
+credenciales globales de WhatsApp. Es un puente temporal mientras ese número
+se migra a una conexión persistida. Si falta la variable y no existe una
+conexión persistida activa, el envío se rechaza: las credenciales globales no
+se usan como fallback para otro negocio. No versiones un identificador real de
+producción.
 
 ### Topología de proxy y redes
 

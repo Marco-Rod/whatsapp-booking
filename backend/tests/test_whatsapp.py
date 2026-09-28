@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import hmac
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import httpx
 import pytest
@@ -25,6 +25,7 @@ from app.models import (
 )
 from app.services.conversation.engine import ConversationEngine
 from app.services.whatsapp.webhook import WebhookService
+from app.services.whatsapp_sender import WhatsAppSender
 from app.services.calendar_resolver import CalendarClientResolver, ResolvedCalendar
 from app.integrations.google_calendar.errors import GoogleCalendarError
 
@@ -42,7 +43,7 @@ async def webhook(booking_client, monkeypatch):
     client, sessions, postgres = booking_client
     config = Settings(_env_file=None, whatsapp_verify_token="test-verify", whatsapp_access_token="test-token",
                       whatsapp_phone_number_id="123456", whatsapp_api_version="v99.0", meta_app_secret="test-app-secret")
-    sender = AsyncMock(spec=WhatsAppClient)
+    sender = AsyncMock(spec=WhatsAppSender)
     calls = []
     fault = {"after_engine": False}
     calendar = AsyncMock(spec=GoogleCalendarClient)
@@ -112,7 +113,7 @@ async def test_duplicate_calls_engine_and_sender_once(webhook):
     for _ in range(2):
         assert (await client.post(URL, json=envelope())).status_code == 200
     assert calls == ["hola"]
-    sender.send_text.assert_awaited_once()
+    sender.send_for_business.assert_awaited_once_with(1, "+523312345678", ANY)
     async with sessions() as session:
         inbound = await session.scalar(select(InboundMessage))
         assert inbound.processed_at is not None
@@ -130,10 +131,10 @@ async def test_confirmation_retry_never_duplicates_booking(webhook):
     await confirm_setup(client)
     payload = envelope("1", "wamid.confirm")
     assert (await client.post(URL, json=payload)).status_code == 200
-    sent = sender.send_text.await_count
+    sent = sender.send_for_business.await_count
     assert (await client.post(URL, json=payload)).status_code == 200
     assert len(calls) == 6
-    assert sender.send_text.await_count == sent
+    assert sender.send_for_business.await_count == sent
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Appointment)) == 1
         conversation = await session.scalar(select(Conversation))
@@ -156,7 +157,7 @@ async def test_ignored_events(webhook, kind):
         value["metadata"]["phone_number_id"] = "999999"
     assert (await client.post(URL, json=payload)).status_code == 200
     assert calls == []
-    sender.send_text.assert_not_awaited()
+    sender.send_for_business.assert_not_awaited()
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(InboundMessage)) == 0
 
@@ -167,16 +168,16 @@ async def test_invalid_payload_no_side_effect(webhook):
     del payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
     assert (await client.post(URL, json=payload)).status_code == 400
     assert calls == []
-    sender.send_text.assert_not_awaited()
+    sender.send_for_business.assert_not_awaited()
 
 
 async def test_delivery_failure_retries_without_reprocessing(webhook):
     client, sessions, sender, calls, _, _ = webhook
-    sender.send_text.side_effect = [WhatsAppSendError("offline"), None]
+    sender.send_for_business.side_effect = [WhatsAppSendError("offline"), None]
     assert (await client.post(URL, json=envelope())).status_code == 503
     assert (await client.post(URL, json=envelope())).status_code == 200
     assert calls == ["hola"]
-    assert sender.send_text.await_count == 2
+    assert sender.send_for_business.await_count == 2
     async with sessions() as session:
         assert (await session.scalar(select(InboundMessage))).payload["sent_count"] == 1
 
@@ -188,15 +189,15 @@ async def test_partial_delivery_resumes_only_pending_response(webhook):
     await client.post(URL, json=envelope("hola", "wamid.hello"))
     await client.post(URL, json=envelope("1", "wamid.menu"))
 
-    sender.send_text.reset_mock()
-    sender.send_text.side_effect = [None, WhatsAppSendError("offline"), None]
+    sender.send_for_business.reset_mock()
+    sender.send_for_business.side_effect = [None, WhatsAppSendError("offline"), None]
 
     payload = envelope("999", "wamid.invalid-service")
     assert (await client.post(URL, json=payload)).status_code == 503
     assert (await client.post(URL, json=payload)).status_code == 200
 
-    texts = [call.args[1] for call in sender.send_text.await_args_list]
-    assert sender.send_text.await_count == 3
+    texts = [call.args[2] for call in sender.send_for_business.await_args_list]
+    assert sender.send_for_business.await_count == 3
     assert texts[0] != texts[1]
     assert texts[1] == texts[2]
 
@@ -208,7 +209,7 @@ async def test_batch_retry_preserves_processed_messages(webhook):
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
     assert calls == ["hola", "1"]
-    assert sender.send_text.await_count == 2
+    assert sender.send_for_business.await_count == 2
 
 
 async def test_unmapped_business_is_not_hardcoded(webhook):
@@ -217,7 +218,7 @@ async def test_unmapped_business_is_not_hardcoded(webhook):
     payload["entry"][0]["changes"][0]["value"]["metadata"]["display_phone_number"] = "523300000099"
     assert (await client.post(URL, json=payload)).status_code == 503
     assert calls == []
-    sender.send_text.assert_not_awaited()
+    sender.send_for_business.assert_not_awaited()
 
 
 async def test_engine_failure_rolls_back_inbound_and_booking(webhook):
@@ -318,11 +319,11 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
     client, sessions, sender, _, fault, _ = webhook
     await enable_calendar(sessions, fault)
     await confirm_setup(client)
-    sender.send_text.reset_mock()
+    sender.send_for_business.reset_mock()
 
     async def sync(**kwargs):
         assert not fault["session"].in_transaction()
-        sender.send_text.assert_not_awaited()
+        sender.send_for_business.assert_not_awaited()
         async with sessions() as session:
             appointment = await session.scalar(select(Appointment))
             assert appointment.status == "CONFIRMED"
@@ -337,34 +338,34 @@ async def test_calendar_runs_after_commit_and_persists_id(webhook):
     fault["calendar"].create_event.assert_awaited_once()
     async with sessions() as session:
         assert (await session.scalar(select(Appointment))).calendar_event_id == "google-event-123"
-    assert sender.send_text.await_count == 1
+    assert sender.send_for_business.await_count == 1
 
 
 async def test_calendar_not_repeated_on_duplicate_or_delivery_retry(webhook):
     client, sessions, sender, _, fault, _ = webhook
     await enable_calendar(sessions, fault)
     await confirm_setup(client)
-    sender.send_text.reset_mock()
-    sender.send_text.side_effect = [WhatsAppSendError("offline"), None]
+    sender.send_for_business.reset_mock()
+    sender.send_for_business.side_effect = [WhatsAppSendError("offline"), None]
     payload = envelope("1", "wamid.confirm")
     assert (await client.post(URL, json=payload)).status_code == 503
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
     fault["calendar"].create_event.assert_awaited_once()
-    assert sender.send_text.await_count == 2
+    assert sender.send_for_business.await_count == 2
 
 
 async def test_calendar_failure_preserves_booking_processing_and_delivery(webhook):
     client, sessions, sender, _, fault, _ = webhook
     await enable_calendar(sessions, fault)
     await confirm_setup(client)
-    sender.send_text.reset_mock()
+    sender.send_for_business.reset_mock()
     fault["calendar"].create_event.side_effect = GoogleCalendarError("insert", status_code=503)
     payload = envelope("1", "wamid.confirm")
     assert (await client.post(URL, json=payload)).status_code == 200
     assert (await client.post(URL, json=payload)).status_code == 200
     fault["calendar"].create_event.assert_awaited_once()
-    assert sender.send_text.await_count == 1
+    assert sender.send_for_business.await_count == 1
     async with sessions() as session:
         appointment = await session.scalar(select(Appointment))
         assert appointment.status == "CONFIRMED"
@@ -401,7 +402,7 @@ async def test_oauth_calendar_syncs_from_stored_connection(webhook):
     )
 
     await confirm_setup(client)
-    sender.send_text.reset_mock()
+    sender.send_for_business.reset_mock()
     response = await client.post(
         URL,
         json=envelope("1", "wamid.confirm"),
@@ -411,7 +412,7 @@ async def test_oauth_calendar_syncs_from_stored_connection(webhook):
     fault["resolver"].resolve.assert_awaited_once_with(1)
     fault["calendar"].create_event.assert_awaited_once()
     assert fault["calendar"].create_event.await_args.kwargs["calendar_id"] == "primary"
-    assert sender.send_text.await_count == 1
+    assert sender.send_for_business.await_count == 1
 
     async with sessions() as session:
         appointment = await session.scalar(select(Appointment))
