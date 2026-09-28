@@ -67,7 +67,8 @@ services:
       db:
         condition: service_healthy
     networks:
-      - edge
+      edge:
+        ipv4_address: ${API_EDGE_IP:-172.30.250.3}
       - data
 
     command:
