@@ -577,7 +577,8 @@ registro condicional y reconciliación.
 
 ### A6.3B-2 — Inspección de token con `debug_token`
 
-**Estado:** implementado localmente, pendiente de revisión/commit.
+**Estado:** completed.
+**Commit:** `3e73140bf694c66dba4a5d18c0b514b3583db8ba`.
 
 Se añade un inspector Graph aislado que ejecuta exactamente un `GET` a
 `/{version}/debug_token`: el token customer-specific recibido por Embedded
@@ -605,6 +606,43 @@ crea/modifica `WhatsAppConnection`, y sus pruebas usan exclusivamente
 transporte mock con credenciales ficticias. Siguen pendientes la verificación
 de activos, suscripción, registro condicional, persistencia cifrada y
 reconciliación de fallos ambiguos.
+
+### A6.3B-3 — Verificación WABA → teléfono
+
+**Estado:** implementado localmente, pendiente de revisión/commit.
+
+Los candidatos WABA y `phone_number_id` recibidos del navegador siguen siendo
+datos no confiables. El verificador aislado exige que ambos sean strings
+decimales sin normalización y consulta server-to-server
+`GET /{version}/{WABA_ID}/phone_numbers`, autorizada exclusivamente con el
+token customer-specific ya validado; no usa el token provider/system-user de
+`debug_token` ni el app secret.
+
+Sólo hay éxito si el ID de teléfono candidato coincide exactamente con un ID
+devuelto bajo la WABA candidata. La respuesta se consume con la misma frontera
+raw acotada a nivel aplicación, identidad de compresión, host/version
+controlados, `trust_env=False`, timeouts explícitos, redirects y reintentos
+deshabilitados. El token customer no aparece en URL, resultado, persistencia,
+errores ni logs.
+
+**Paginación:** la colección oficial Meta consultada el 2026-09-29 advierte que
+los endpoints de colecciones pueden paginar y exponen `previous`/`next`; aunque
+el ejemplo de `phone_numbers` muestra una lista, no se presupone que la primera
+página sea exhaustiva. Este checkpoint no sigue URLs de paging. Si el teléfono
+está en la primera página, verifica éxito; si no aparece y `paging.next` o
+`paging.cursors.after` indica otra página, retorna un resultado tipado de
+verificación incompleta en lugar de declarar que no pertenece. Sin indicador
+de página siguiente, la ausencia produce mismatch tipado únicamente cuando la
+metadata de paginación está ausente o es un objeto vacío terminal. Metadata
+presente pero `null`, vacía en un campo de continuación o estructuralmente
+inválida produce error de schema, nunca mismatch. El verificador valida toda
+la página antes de éxito: una entrada malformada no puede ser eclipsada por
+una coincidencia previa o posterior.
+
+A6.3B-3 no se integra en `/complete`, no adquiere ni modifica leases, no
+persiste tokens ni muta `WhatsAppConnection`; tampoco llama a
+`subscribed_apps` ni `register`. Permanecen pendientes suscripción, registro
+condicional, persistencia cifrada, orquestación transaccional y reconciliación.
 
 ## 9. Remaining external requirements
 
@@ -637,7 +675,8 @@ rollback/recuperación. Este documento no expone valores de producción.
 | A6.2 | completed | `161a1b8b4f86bc759ec207e3fb66c9e25a6d4ac8` | Ephemeral signup asset-correlation boundary | no |
 | A6.3A | completed | `68504d8e62653edcf9a081310fbe3364a550ae93` | Processing leases before external exchange | no |
 | A6.3B-1 | completed | `270bcfe16711b211ca080c351e86ce1740cd7c8a` | One-shot authorization-code exchange | no |
-| A6.3B-2 | implemented locally, pending review/commit | pending review/commit | `debug_token` validation; asset verification pending | no |
+| A6.3B-2 | completed | `3e73140bf694c66dba4a5d18c0b514b3583db8ba` | `debug_token` validation | no |
+| A6.3B-3 | implemented locally, pending review/commit | pending review/commit | WABA → phone membership verification | no |
 
 ## 12. Updating this document
 
