@@ -22,6 +22,11 @@ class Settings(BaseSettings):
         gt=0,
         le=3_600,
     )
+    embedded_signup_processing_lease_seconds: int = Field(
+        default=120,
+        gt=0,
+        le=600,
+    )
     embedded_signup_max_body_bytes: int = Field(
         default=16_384,
         gt=0,

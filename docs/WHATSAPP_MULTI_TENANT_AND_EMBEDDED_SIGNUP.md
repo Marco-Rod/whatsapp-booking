@@ -203,7 +203,8 @@ la API verificada los requiera.
 
 ## 8. A6.2 — Backend security boundary
 
-**Estado:** implemented locally, pending review/commit.
+**Estado:** completed.
+**Commit:** `161a1b8b4f86bc759ec207e3fb66c9e25a6d4ac8`.
 **Migración:** `0013_embedded_signup_attempts` (aditiva; aún no aplicada en
 producción).
 
@@ -247,9 +248,44 @@ secretos para trazabilidad de la fase; no existe aún un scheduler de purga.
 El TTL se aplica en la autorización y la retención/purga acotada se decidirá
 antes de habilitar onboarding externo masivo.
 
-**Siguiente checkpoint:** A6.3 definirá el exchange Meta server-to-server y
-la verificación de ownership de activos dentro de una transacción que no
-deje una conexión parcialmente habilitada.
+### A6.3A — Processing leases
+
+**Estado:** implemented locally, pending review/commit.
+**Migración:** `0014_embedded_signup_processing_leases` (aditiva; aún no
+aplicada en producción).
+
+Los intentos usan tres estados persistidos:
+
+```text
+READY ── acquire ──► PROCESSING ── finalize_success ──► CONSUMED
+  ▲                       │
+  └──── release seguro ───┘
+                          │
+                    lease expira
+                          │
+                          └──► reacquirible si expires_at sigue vigente
+```
+
+`PROCESSING` contiene inicio, expiración y hash SHA-256 de una lease token
+interna. El token no sale por API ni se persiste en claro. `acquire` usa un
+`UPDATE` condicional y termina su transacción antes de cualquier I/O externo.
+`finalize_success` y `release` exigen negocio, lease válida, lease vigente,
+TTL global vigente y estado `processing`; un worker obsoleto no puede
+finalizar ni liberar una lease recuperada.
+
+A6.3B compondrá la persistencia de `WhatsAppConnection` y
+`finalize_success` dentro de la misma transacción local. A6.3A no llama a
+Meta: `/complete` valida sus límites, payload y sesión, pero devuelve `501`
+para que no parezca una conexión exitosa antes de implementar el exchange.
+
+**UNKNOWN:** Meta puede considerar el authorization code de un solo uso o
+inválido tras un timeout ambiguo. Que el intento de aplicación sea
+reacquirible no implica que el mismo code pueda reutilizarse. A6.3 no hará
+reintentos automáticos de un code cuyo resultado remoto sea desconocido.
+
+**Siguiente checkpoint:** A6.3B implementará exchange Meta server-to-server,
+verificación de ownership de activos y persistencia atómica de conexión más
+consumo definitivo.
 
 ## 9. Remaining external requirements
 
@@ -279,7 +315,8 @@ rollback/recuperación. Este documento no expone valores de producción.
 | A5 | completed | `ad47be1ee5d45a7f0a98a0539c3c887ae1de3640` | Remove runtime bridge | yes |
 | A6.0 | completed | documentation/research | Flow research | n/a |
 | A6.1 | completed | console verification | Meta Console Readiness | n/a |
-| A6.2 | implemented locally | pending review/commit | Ephemeral signup asset-correlation boundary | no |
+| A6.2 | completed | `161a1b8b4f86bc759ec207e3fb66c9e25a6d4ac8` | Ephemeral signup asset-correlation boundary | no |
+| A6.3A | implemented locally | pending review/commit | Processing leases before external exchange | no |
 
 ## 12. Updating this document
 

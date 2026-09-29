@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import SecretStr
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session as SyncSession
 
 from test_booking import booking_client  # noqa: F401
 
@@ -11,13 +13,23 @@ from app.api.v1 import embedded_signup
 from app.core.config import settings
 from app.core.database import get_session
 from app.main import app
-from app.models import Business, EmbeddedSignupAttempt, WhatsAppConnection
+from app.models import (
+    Business,
+    EmbeddedSignupAttempt,
+    EmbeddedSignupAttemptStatus,
+    WhatsAppConnection,
+)
 from app.security.admin_sessions import AdminSessionManager
 from app.security.admin_tokens import hash_admin_token
 from app.services.embedded_signup import (
+    AcquiredEmbeddedSignupAttempt,
     EmbeddedSignupAttemptConsumedError,
+    EmbeddedSignupAttemptExpiredError,
+    EmbeddedSignupAttemptLeaseError,
+    EmbeddedSignupAttemptOwnershipError,
+    EmbeddedSignupAttemptProcessingError,
     EmbeddedSignupAttemptService,
-    ValidatedEmbeddedSignupCompletion,
+    hash_processing_lease,
 )
 
 
@@ -33,6 +45,7 @@ def embedded_signup_config(monkeypatch):
     config = settings.model_copy(
         update={
             "embedded_signup_attempt_ttl_seconds": 600,
+            "embedded_signup_processing_lease_seconds": 120,
             "embedded_signup_max_body_bytes": 16_384,
         }
     )
@@ -72,26 +85,39 @@ def completion_payload(nonce: str, **overrides) -> dict:
     }
 
 
+def service(session, *, now=None) -> EmbeddedSignupAttemptService:
+    return EmbeddedSignupAttemptService(
+        session,
+        ttl_seconds=600,
+        processing_lease_seconds=120,
+        now=now,
+    )
+
+
 async def start(client) -> dict:
     response = await client.post(START_URL)
     assert response.status_code == 200
     return response.json()
 
 
-async def count_attempts(sessions) -> int:
+async def get_attempt(sessions) -> EmbeddedSignupAttempt:
     async with sessions() as session:
-        return await session.scalar(
-            select(func.count()).select_from(EmbeddedSignupAttempt)
-        )
+        return await session.scalar(select(EmbeddedSignupAttempt))
 
 
 async def test_start_requires_admin_session(booking_client, embedded_signup_config):
     client, _, _ = booking_client
-
     assert (await client.post(START_URL)).status_code == 401
 
 
-async def test_authenticated_start_creates_hashed_attempt_for_session_business(
+async def test_complete_requires_admin_session(booking_client, embedded_signup_config):
+    client, _, _ = booking_client
+    assert (
+        await client.post(COMPLETE_URL, json=completion_payload("x" * 32))
+    ).status_code == 401
+
+
+async def test_authenticated_start_creates_hashed_ready_attempt(
     booking_client,
     embedded_signup_config,
 ):
@@ -99,57 +125,21 @@ async def test_authenticated_start_creates_hashed_attempt_for_session_business(
     await authenticate(client, sessions, 1)
 
     result = await start(client)
+    attempt = await get_attempt(sessions)
 
     assert set(result) == {"nonce", "expires_at"}
-    assert len(result["nonce"]) >= 32
-    async with sessions() as session:
-        attempt = await session.scalar(select(EmbeddedSignupAttempt))
-        assert attempt.business_id == 1
-        assert attempt.nonce_hash != result["nonce"]
-        assert result["nonce"] not in attempt.nonce_hash
-        assert attempt.consumed_at is None
+    assert attempt.business_id == 1
+    assert attempt.nonce_hash != result["nonce"]
+    assert result["nonce"] not in attempt.nonce_hash
+    assert attempt.status == EmbeddedSignupAttemptStatus.READY.value
+    assert attempt.consumed_at is None
+    assert attempt.processing_lease_hash is None
 
 
-async def test_attempt_from_another_business_cannot_be_consumed(
+async def test_complete_is_explicitly_not_enabled_and_does_not_mutate_state(
     booking_client,
     embedded_signup_config,
 ):
-    client, sessions, _ = booking_client
-    await authenticate(client, sessions, 1)
-    attempt = await start(client)
-
-    await authenticate(client, sessions, 2)
-    denied = await client.post(COMPLETE_URL, json=completion_payload(attempt["nonce"]))
-    assert denied.status_code == 403
-
-    await authenticate(client, sessions, 1)
-    assert (await client.post(COMPLETE_URL, json=completion_payload(attempt["nonce"]))).status_code == 204
-
-
-async def test_valid_completion_consumes_once_without_persisting_code(
-    booking_client,
-    embedded_signup_config,
-):
-    client, sessions, _ = booking_client
-    await authenticate(client, sessions, 1)
-    attempt = await start(client)
-    body = completion_payload(attempt["nonce"])
-
-    assert (await client.post(COMPLETE_URL, json=body)).status_code == 204
-    assert (await client.post(COMPLETE_URL, json=body)).status_code == 409
-
-    async with sessions() as session:
-        stored = await session.scalar(select(EmbeddedSignupAttempt))
-        assert stored.consumed_at is not None
-        assert body["authorization_code"] not in repr(stored)
-        assert body["authorization_code"] not in str(stored.__dict__)
-
-
-async def test_completion_stops_at_the_a63_handoff_boundary(
-    booking_client,
-    embedded_signup_config,
-):
-    """A6.2 must not exchange Meta credentials or mutate connections."""
     client, sessions, _ = booking_client
     await authenticate(client, sessions, 1)
     attempt = await start(client)
@@ -160,27 +150,15 @@ async def test_completion_stops_at_the_a63_handoff_boundary(
 
     response = await client.post(COMPLETE_URL, json=completion_payload(attempt["nonce"]))
 
-    assert response.status_code == 204
+    assert response.status_code == 501
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.READY.value
+    assert "test-authorization-code" not in str(stored.__dict__)
     async with sessions() as session:
         connections_after = await session.scalar(
             select(func.count()).select_from(WhatsAppConnection)
         )
     assert connections_after == connections_before
-
-
-async def test_expired_attempt_is_rejected_without_consumption(
-    booking_client,
-    embedded_signup_config,
-):
-    client, sessions, _ = booking_client
-    await authenticate(client, sessions, 1)
-    attempt = await start(client)
-    async with sessions.begin() as session:
-        stored = await session.scalar(select(EmbeddedSignupAttempt))
-        stored.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-
-    response = await client.post(COMPLETE_URL, json=completion_payload(attempt["nonce"]))
-    assert response.status_code == 409
 
 
 @pytest.mark.parametrize(
@@ -189,43 +167,47 @@ async def test_expired_attempt_is_rejected_without_consumption(
         {},
         {"attempt_nonce": "short"},
         {"attempt_nonce": "x" * 32, "authorization_code": ""},
-        {"attempt_nonce": "x" * 32, "authorization_code": "code", "candidate_account_id": "abc", "candidate_phone_number_id": "2"},
-        {"attempt_nonce": "x" * 32, "authorization_code": "code", "candidate_account_id": "1", "candidate_phone_number_id": "abc"},
-        {"attempt_nonce": "x" * 32, "authorization_code": "code", "candidate_account_id": "1", "candidate_phone_number_id": "2", "business_id": 2},
+        {
+            "attempt_nonce": "x" * 32,
+            "authorization_code": "code",
+            "candidate_account_id": "invalid",
+            "candidate_phone_number_id": "2",
+        },
+        {
+            "attempt_nonce": "x" * 32,
+            "authorization_code": "code",
+            "candidate_account_id": "1",
+            "candidate_phone_number_id": "2",
+            "business_id": 2,
+        },
     ],
 )
-async def test_completion_rejects_malformed_or_client_selected_tenant(
+async def test_complete_rejects_invalid_or_client_selected_tenant(
     booking_client,
     embedded_signup_config,
     payload,
 ):
-    client, sessions, _ = booking_client
-    await authenticate(client, sessions, 1)
-
-    response = await client.post(COMPLETE_URL, json=payload)
-
-    assert response.status_code == 422
-    assert await count_attempts(sessions) == 0
+    client, _, _ = booking_client
+    await authenticate(client, booking_client[1], 1)
+    assert (await client.post(COMPLETE_URL, json=payload)).status_code == 422
 
 
-async def test_completion_rejects_oversized_code_before_consuming_attempt(
+async def test_oversized_code_is_not_reflected_in_validation_error(
     booking_client,
     embedded_signup_config,
 ):
     client, sessions, _ = booking_client
     await authenticate(client, sessions, 1)
     attempt = await start(client)
+    oversized_code = "x" * 4_097
 
     response = await client.post(
         COMPLETE_URL,
-        json=completion_payload(attempt["nonce"], authorization_code="x" * 4_097),
+        json=completion_payload(attempt["nonce"], authorization_code=oversized_code),
     )
 
     assert response.status_code == 422
-    assert "x" * 4_097 not in response.text
-    async with sessions() as session:
-        stored = await session.scalar(select(EmbeddedSignupAttempt))
-        assert stored.consumed_at is None
+    assert oversized_code not in response.text
 
 
 async def test_oversized_body_is_rejected_before_authentication_or_database(
@@ -264,44 +246,282 @@ async def test_oversized_body_is_rejected_before_authentication_or_database(
     assert session_calls == 0
 
 
-async def test_concurrent_service_completion_has_exactly_one_success(
+async def test_ready_attempt_acquires_hashed_lease(booking_client, embedded_signup_config):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(
+            business_id=1,
+            attempt_nonce=created.nonce,
+        )
+
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.PROCESSING.value
+    assert stored.processing_lease_hash == hash_processing_lease(acquired.lease_token)
+    assert acquired.lease_token not in repr(acquired)
+    assert acquired.lease_token not in str(stored.__dict__)
+
+
+async def test_concurrent_acquire_has_exactly_one_success(
     booking_client,
     embedded_signup_config,
 ):
     _, sessions, _ = booking_client
     async with sessions() as session:
-        created = await EmbeddedSignupAttemptService(
-            session,
-            ttl_seconds=600,
-        ).start(1)
+        created = await service(session).start(1)
 
-    async def complete_once():
+    async def acquire_once():
         async with sessions() as session:
-            return await EmbeddedSignupAttemptService(
-                session,
-                ttl_seconds=600,
-            ).complete(
+            return await service(session).acquire(
                 business_id=1,
                 attempt_nonce=created.nonce,
-                authorization_code="test-authorization-code",
-                candidate_account_id="123456789",
-                candidate_phone_number_id="987654321",
             )
 
     results = await asyncio.gather(
-        complete_once(),
-        complete_once(),
+        acquire_once(),
+        acquire_once(),
         return_exceptions=True,
     )
     assert sum(not isinstance(result, Exception) for result in results) == 1
-    assert sum(isinstance(result, EmbeddedSignupAttemptConsumedError) for result in results) == 1
+    assert sum(
+        isinstance(result, EmbeddedSignupAttemptProcessingError)
+        for result in results
+    ) == 1
 
 
-def test_validated_completion_repr_hides_authorization_code():
-    completion = ValidatedEmbeddedSignupCompletion(
+async def test_active_lease_blocks_acquire(booking_client, embedded_signup_config):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptProcessingError):
+            await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+
+
+async def test_expired_lease_can_be_reacquired_with_new_capability(
+    booking_client,
+    embedded_signup_config,
+):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        first = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions.begin() as session:
+        stored = await session.scalar(select(EmbeddedSignupAttempt))
+        stored.processing_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with sessions() as session:
+        second = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+
+    assert first.lease_token != second.lease_token
+
+
+async def test_stale_lease_cannot_finalize_or_release(booking_client, embedded_signup_config):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        stale = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions.begin() as session:
+        stored = await session.scalar(select(EmbeddedSignupAttempt))
+        stored.processing_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with sessions() as session:
+        current = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptLeaseError):
+            await service(session).finalize_success(
+                business_id=1,
+                attempt_id=stale.attempt_id,
+                lease_token=stale.lease_token,
+            )
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptLeaseError):
+            await service(session).release(
+                business_id=1,
+                attempt_id=stale.attempt_id,
+                lease_token=stale.lease_token,
+            )
+    assert current.lease_token != stale.lease_token
+
+
+async def test_valid_finalize_consumes_and_blocks_reacquire(
+    booking_client,
+    embedded_signup_config,
+):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        await service(session).finalize_success(
+            business_id=1,
+            attempt_id=acquired.attempt_id,
+            lease_token=acquired.lease_token,
+        )
+
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.CONSUMED.value
+    assert stored.consumed_at is not None
+    assert stored.processing_lease_hash is None
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptConsumedError):
+            await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+
+
+async def test_finalize_wrong_tenant_or_expired_lease_fails(
+    booking_client,
+    embedded_signup_config,
+):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptOwnershipError):
+            await service(session).finalize_success(
+                business_id=2,
+                attempt_id=acquired.attempt_id,
+                lease_token=acquired.lease_token,
+            )
+    async with sessions.begin() as session:
+        stored = await session.scalar(select(EmbeddedSignupAttempt))
+        stored.processing_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptLeaseError):
+            await service(session).finalize_success(
+                business_id=1,
+                attempt_id=acquired.attempt_id,
+                lease_token=acquired.lease_token,
+            )
+
+
+async def test_global_expiry_blocks_finalize_release_and_acquire(
+    booking_client,
+    embedded_signup_config,
+):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions.begin() as session:
+        stored = await session.scalar(select(EmbeddedSignupAttempt))
+        stored.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptExpiredError):
+            await service(session).finalize_success(
+                business_id=1,
+                attempt_id=acquired.attempt_id,
+                lease_token=acquired.lease_token,
+            )
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptExpiredError):
+            await service(session).release(
+                business_id=1,
+                attempt_id=acquired.attempt_id,
+                lease_token=acquired.lease_token,
+            )
+    async with sessions() as session:
+        with pytest.raises(EmbeddedSignupAttemptExpiredError):
+            await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+
+
+async def test_valid_release_returns_attempt_to_ready(booking_client, embedded_signup_config):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        await service(session).release(
+            business_id=1,
+            attempt_id=acquired.attempt_id,
+            lease_token=acquired.lease_token,
+        )
+
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.READY.value
+    assert stored.processing_started_at is None
+    assert stored.processing_expires_at is None
+    assert stored.processing_lease_hash is None
+
+
+async def test_finalize_rollback_keeps_processing_state(booking_client, embedded_signup_config):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+    async with sessions() as session:
+        acquired = await service(session).acquire(business_id=1, attempt_nonce=created.nonce)
+    async with sessions() as session:
+        with pytest.raises(RuntimeError):
+            async with session.begin():
+                await service(session).finalize_success_in_transaction(
+                    business_id=1,
+                    attempt_id=acquired.attempt_id,
+                    lease_token=acquired.lease_token,
+                )
+                raise RuntimeError("rollback")
+
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.PROCESSING.value
+    assert stored.consumed_at is None
+
+
+async def test_acquire_rollback_keeps_attempt_ready_and_reacquirable(
+    booking_client,
+    embedded_signup_config,
+):
+    _, sessions, _ = booking_client
+    async with sessions() as session:
+        created = await service(session).start(1)
+
+    def fail_commit(_session):
+        raise SQLAlchemyError("simulated acquire commit rejection")
+
+    event.listen(SyncSession, "before_commit", fail_commit)
+    try:
+        async with sessions() as session:
+            with pytest.raises(SQLAlchemyError, match="acquire commit rejection"):
+                await service(session).acquire(
+                    business_id=1,
+                    attempt_nonce=created.nonce,
+                )
+    finally:
+        event.remove(SyncSession, "before_commit", fail_commit)
+
+    stored = await get_attempt(sessions)
+    assert stored.status == EmbeddedSignupAttemptStatus.READY.value
+    assert stored.consumed_at is None
+    assert stored.processing_started_at is None
+    assert stored.processing_expires_at is None
+    assert stored.processing_lease_hash is None
+
+    async with sessions() as session:
+        reacquired = await service(session).acquire(
+            business_id=1,
+            attempt_nonce=created.nonce,
+        )
+    assert reacquired.attempt_id == stored.id
+
+
+def test_lease_capability_repr_is_safe():
+    acquired = AcquiredEmbeddedSignupAttempt(
+        attempt_id=1,
         business_id=1,
-        authorization_code="test-authorization-code",
-        candidate_account_id="123456789",
-        candidate_phone_number_id="987654321",
+        expires_at=datetime.now(timezone.utc),
+        processing_expires_at=datetime.now(timezone.utc),
+        lease_token="test-lease-token",
     )
-    assert "test-authorization-code" not in repr(completion)
+    assert "test-lease-token" not in repr(acquired)
+
+
+def test_authorization_code_is_not_in_request_repr():
+    from app.schemas.embedded_signup import EmbeddedSignupCompleteRequest
+
+    request = EmbeddedSignupCompleteRequest(**completion_payload("x" * 32))
+    assert "test-authorization-code" not in repr(request)

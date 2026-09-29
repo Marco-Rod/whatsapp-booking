@@ -205,12 +205,38 @@ class WhatsAppConnection(Timestamps, Base):
     )
 
 
+class EmbeddedSignupAttemptStatus(str, Enum):
+    READY = "ready"
+    PROCESSING = "processing"
+    CONSUMED = "consumed"
+
+
 class EmbeddedSignupAttempt(Base):
     """A single-use application correlation nonce for Meta Embedded Signup."""
 
     __tablename__ = "embedded_signup_attempts"
     __table_args__ = (
         Index("ix_embedded_signup_attempts_expires_at", "expires_at"),
+        Index(
+            "ix_embedded_signup_attempts_processing_expires_at",
+            "status",
+            "processing_expires_at",
+        ),
+        CheckConstraint(
+            "(status = 'ready' AND consumed_at IS NULL "
+            "AND processing_started_at IS NULL "
+            "AND processing_expires_at IS NULL "
+            "AND processing_lease_hash IS NULL) "
+            "OR (status = 'processing' AND consumed_at IS NULL "
+            "AND processing_started_at IS NOT NULL "
+            "AND processing_expires_at IS NOT NULL "
+            "AND processing_lease_hash IS NOT NULL) "
+            "OR (status = 'consumed' AND consumed_at IS NOT NULL "
+            "AND processing_started_at IS NULL "
+            "AND processing_expires_at IS NULL "
+            "AND processing_lease_hash IS NULL)",
+            name="ck_embedded_signup_attempt_lifecycle",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -235,6 +261,23 @@ class EmbeddedSignupAttempt(Base):
     )
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default=EmbeddedSignupAttemptStatus.READY.value,
+        nullable=False,
+    )
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    processing_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    processing_lease_hash: Mapped[str | None] = mapped_column(
+        String(64),
         nullable=True,
     )
 

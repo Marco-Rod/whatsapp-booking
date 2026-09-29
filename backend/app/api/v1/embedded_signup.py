@@ -14,13 +14,7 @@ from app.schemas.embedded_signup import (
     EmbeddedSignupCompleteRequest,
     EmbeddedSignupStartResponse,
 )
-from app.services.embedded_signup import (
-    EmbeddedSignupAttemptConsumedError,
-    EmbeddedSignupAttemptExpiredError,
-    EmbeddedSignupAttemptNotFoundError,
-    EmbeddedSignupAttemptOwnershipError,
-    EmbeddedSignupAttemptService,
-)
+from app.services.embedded_signup import EmbeddedSignupAttemptService
 
 
 router = APIRouter(
@@ -81,6 +75,7 @@ async def start_embedded_signup(
     attempt = await EmbeddedSignupAttemptService(
         session,
         ttl_seconds=config.embedded_signup_attempt_ttl_seconds,
+        processing_lease_seconds=config.embedded_signup_processing_lease_seconds,
     ).start(business_id)
     return EmbeddedSignupStartResponse(
         nonce=attempt.nonce,
@@ -88,7 +83,7 @@ async def start_embedded_signup(
     )
 
 
-@router.post("/complete", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/complete")
 async def complete_embedded_signup(
     completion: Annotated[
         EmbeddedSignupCompleteRequest,
@@ -98,38 +93,9 @@ async def complete_embedded_signup(
     session: Annotated[AsyncSession, Depends(get_session)],
     config: Annotated[Settings, Depends(get_embedded_signup_settings)],
 ) -> None:
-    try:
-        await EmbeddedSignupAttemptService(
-            session,
-            ttl_seconds=config.embedded_signup_attempt_ttl_seconds,
-        ).complete(
-            business_id=business_id,
-            attempt_nonce=completion.attempt_nonce,
-            authorization_code=completion.authorization_code,
-            candidate_account_id=completion.candidate_account_id,
-            candidate_phone_number_id=completion.candidate_phone_number_id,
-        )
-    except EmbeddedSignupAttemptNotFoundError:
-        raise _invalid_attempt() from None
-    except EmbeddedSignupAttemptOwnershipError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Embedded Signup attempt access denied",
-        ) from None
-    except EmbeddedSignupAttemptExpiredError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Embedded Signup attempt expired",
-        ) from None
-    except EmbeddedSignupAttemptConsumedError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Embedded Signup attempt already consumed",
-        ) from None
-
-
-def _invalid_attempt() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Invalid Embedded Signup attempt",
+    # A6.3A deliberately has no Meta exchange. Do not acquire a lease here:
+    # that would make a browser believe WhatsApp was connected when it is not.
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Embedded Signup exchange is not enabled",
     )
