@@ -38,7 +38,15 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_waba_id: str = ""
     whatsapp_api_version: str = ""
+    meta_app_id: str = ""
     meta_app_secret: SecretStr = SecretStr("")
+    meta_embedded_signup_oauth_redirect_uri: str = ""
+    meta_embedded_signup_exchange_graph_version: str = "v25.0"
+    meta_embedded_signup_exchange_max_response_bytes: int = Field(
+        default=16_384,
+        gt=0,
+        le=1_048_576,
+    )
 
     credential_encryption_key: SecretStr | None = None
     google_oauth_client_id: SecretStr | None = None
