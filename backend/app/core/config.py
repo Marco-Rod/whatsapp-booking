@@ -60,6 +60,14 @@ class Settings(BaseSettings):
         gt=0,
         le=1_048_576,
     )
+    meta_provider_business_id: str = ""
+    meta_embedded_signup_system_user_token: SecretStr = SecretStr("")
+    meta_embedded_signup_subscription_graph_version: str = "v25.0"
+    meta_embedded_signup_subscription_max_response_bytes: int = Field(
+        default=16_384,
+        gt=0,
+        le=1_048_576,
+    )
 
     credential_encryption_key: SecretStr | None = None
     google_oauth_client_id: SecretStr | None = None

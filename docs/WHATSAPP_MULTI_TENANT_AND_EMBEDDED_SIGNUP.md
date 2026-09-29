@@ -609,7 +609,8 @@ reconciliación de fallos ambiguos.
 
 ### A6.3B-3 — Verificación WABA → teléfono
 
-**Estado:** implementado localmente, pendiente de revisión/commit.
+**Estado:** completed.
+**Commit:** `c055d79013cc9ebfb6786c7ca697a7d2c9fd697d`.
 
 Los candidatos WABA y `phone_number_id` recibidos del navegador siguen siendo
 datos no confiables. El verificador aislado exige que ambos sean strings
@@ -644,6 +645,35 @@ persiste tokens ni muta `WhatsAppConnection`; tampoco llama a
 `subscribed_apps` ni `register`. Permanecen pendientes suscripción, registro
 condicional, persistencia cifrada, orquestación transaccional y reconciliación.
 
+### A6.3B-4 — Suscripción segura de app a WABA
+
+**Estado:** completed; commit creado en este checkpoint.
+
+Este límite aislado opera exclusivamente con el token System User del
+proveedor, nunca con el token OAuth/customer de Embedded Signup. Requiere los
+identificadores configurados del negocio proveedor y de la app, además del
+token provider secreto. Antes de considerar cualquier mutación, consulta las
+WABAs compartidas del proveedor y exige que la WABA candidata aparezca por ID
+exacto. No usa `assigned_users`: una lectura autorizada de `subscribed_apps`
+con la credencial provider es la prueba operacional de autoridad que Meta
+acepta para la operación concreta.
+
+Las enumeraciones son conservadoras: una coincidencia en la primera página
+vale como prueba positiva, pero una ausencia con paginación no terminal es
+inconclusa y no se siguen URLs de Meta. Si nuestra app ya aparece bajo
+`data[].whatsapp_business_api_data.id`, no se emite POST. Sólo tras una
+ausencia terminal se emite un único `POST /{WABA}/subscribed_apps`; no hay
+retries automáticos. La respuesta acepta únicamente `success: true` o
+`success: "true"`, y aun así el éxito final exige un GET posterior que observe
+el `META_APP_ID` exacto.
+
+Timeouts, resets, errores de stream y acknowledgements POST malformados o no
+confiables nunca disparan otro POST: se realiza un GET de reconciliación y la
+ausencia o incertidumbre permanece como resultado incompleto. El cliente conserva host/version
+controlados, TLS, `trust_env=False`, redirects deshabilitados, `Accept-Encoding:
+identity`, lectura raw acotada y errores sanitizados. No usa base de datos,
+leases ni `/complete`; tampoco persiste o expone el token System User.
+
 ## 9. Remaining external requirements
 
 - Business Verification.
@@ -676,7 +706,8 @@ rollback/recuperación. Este documento no expone valores de producción.
 | A6.3A | completed | `68504d8e62653edcf9a081310fbe3364a550ae93` | Processing leases before external exchange | no |
 | A6.3B-1 | completed | `270bcfe16711b211ca080c351e86ce1740cd7c8a` | One-shot authorization-code exchange | no |
 | A6.3B-2 | completed | `3e73140bf694c66dba4a5d18c0b514b3583db8ba` | `debug_token` validation | no |
-| A6.3B-3 | implemented locally, pending review/commit | pending review/commit | WABA → phone membership verification | no |
+| A6.3B-3 | completed | `c055d79013cc9ebfb6786c7ca697a7d2c9fd697d` | WABA → phone membership verification | no |
+| A6.3B-4 | completed | commit created in this checkpoint | Provider-side WABA app subscription | no |
 
 ## 12. Updating this document
 
