@@ -542,7 +542,8 @@ teléfono o implementará reconciliación automática.
 
 ### A6.3B-1 — Cliente one-shot de exchange
 
-**Estado:** implementado localmente, pendiente de revisión/commit.
+**Estado:** completed.
+**Commit:** `270bcfe16711b211ca080c351e86ce1740cd7c8a`.
 
 Se añadió un cliente aislado para construir exactamente un `POST` a la versión
 de Graph observada con JSON, sin query parameters adicionales. El cliente usa
@@ -574,6 +575,37 @@ integrado en `/complete`, no adquiere leases ni persiste ningún secreto o
 conexión. Aún faltan validación con `debug_token`, activos, suscripción,
 registro condicional y reconciliación.
 
+### A6.3B-2 — Inspección de token con `debug_token`
+
+**Estado:** implementado localmente, pendiente de revisión/commit.
+
+Se añade un inspector Graph aislado que ejecuta exactamente un `GET` a
+`/{version}/debug_token`: el token customer-specific recibido por Embedded
+Signup se entrega sólo como `input_token`, mientras un token separado de
+proveedor/system-user autoriza la petición mediante Bearer. No se reutiliza
+ninguna credencial de cliente como token de inspección.
+
+La versión Graph del inspector se configura explícitamente y por separado,
+con default `v25.0`, alineado con el request observado de exchange; no queda
+acoplada a la versión del webhook sin evidencia. El cliente conserva las
+propiedades de B-1: host controlado, TLS de `httpx`, `trust_env=False`,
+timeouts explícitos, redirects y reintentos deshabilitados, `Accept-Encoding:
+identity`, rechazo de respuestas comprimidas y lectura raw incremental con
+límite de respuesta a nivel aplicación.
+
+La respuesta exige `data`, `is_valid: true` y el `app_id` esperado. Preserva
+de forma tipada `type`, expiraciones, `scopes`, granular scopes y
+`target_ids` cuando se presentan y son válidos; no deriva lifetime normativo,
+no acepta aún activos por `target_ids` como autoridad final y no sustituye la
+verificación futura WABA → teléfono. Los tokens y respuestas upstream no se
+persisten ni se incluyen en logs, errores o `repr`.
+
+A6.3B-2 no se integra en `/complete`, no adquiere ni modifica leases, no
+crea/modifica `WhatsAppConnection`, y sus pruebas usan exclusivamente
+transporte mock con credenciales ficticias. Siguen pendientes la verificación
+de activos, suscripción, registro condicional, persistencia cifrada y
+reconciliación de fallos ambiguos.
+
 ## 9. Remaining external requirements
 
 - Business Verification.
@@ -604,7 +636,8 @@ rollback/recuperación. Este documento no expone valores de producción.
 | A6.1 | completed | console verification | Meta Console Readiness | n/a |
 | A6.2 | completed | `161a1b8b4f86bc759ec207e3fb66c9e25a6d4ac8` | Ephemeral signup asset-correlation boundary | no |
 | A6.3A | completed | `68504d8e62653edcf9a081310fbe3364a550ae93` | Processing leases before external exchange | no |
-| A6.3B | implemented locally, pending review/commit | pending review/commit | One-shot exchange client; asset verification pending | no |
+| A6.3B-1 | completed | `270bcfe16711b211ca080c351e86ce1740cd7c8a` | One-shot authorization-code exchange | no |
+| A6.3B-2 | implemented locally, pending review/commit | pending review/commit | `debug_token` validation; asset verification pending | no |
 
 ## 12. Updating this document
 

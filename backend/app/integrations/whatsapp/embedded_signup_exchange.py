@@ -12,6 +12,13 @@ import re
 import httpx
 from pydantic import SecretStr
 
+from app.integrations.whatsapp.meta_graph_response import (
+    MetaGraphResponseTooLargeError,
+    is_identity_content_encoding,
+    is_json_content_type,
+    read_bounded_raw_response,
+)
+
 
 _GRAPH_HOST = "https://graph.facebook.com"
 _VERSION_PATTERN = re.compile(r"v[0-9]+\.[0-9]+$")
@@ -153,20 +160,25 @@ class MetaEmbeddedSignupExchangeClient:
                         raise MetaEmbeddedSignupExchangeUpstreamError(
                             response.status_code
                         )
-                    if not _is_json_content_type(response.headers.get("content-type")):
+                    if not is_json_content_type(response.headers.get("content-type")):
                         raise MetaEmbeddedSignupExchangeContentTypeError(
                             "Meta Embedded Signup response is not JSON"
                         )
-                    if not _is_identity_content_encoding(
+                    if not is_identity_content_encoding(
                         response.headers.get("content-encoding")
                     ):
                         raise MetaEmbeddedSignupExchangeContentEncodingError(
                             "Meta Embedded Signup response encoding is unsupported"
                         )
-                    body = await _read_bounded_response(
-                        response,
-                        self._max_response_bytes,
-                    )
+                    try:
+                        body = await read_bounded_raw_response(
+                            response,
+                            self._max_response_bytes,
+                        )
+                    except MetaGraphResponseTooLargeError:
+                        raise MetaEmbeddedSignupExchangeResponseTooLargeError(
+                            "Meta Embedded Signup response is too large"
+                        ) from None
         except MetaEmbeddedSignupExchangeError:
             raise
         except httpx.TimeoutException:
@@ -194,40 +206,3 @@ class MetaEmbeddedSignupExchangeClient:
                 "Meta Embedded Signup response is invalid"
             )
         return EmbeddedSignupExchangeToken(access_token=SecretStr(token))
-
-
-def _is_json_content_type(value: str | None) -> bool:
-    if value is None:
-        return False
-    media_type = value.split(";", 1)[0].strip().lower()
-    return media_type == "application/json" or media_type.endswith("+json")
-
-
-def _is_identity_content_encoding(value: str | None) -> bool:
-    return value is None or value.strip().lower() == "identity"
-
-
-async def _read_bounded_response(
-    response: httpx.Response,
-    maximum_bytes: int,
-) -> bytes:
-    declared_length = response.headers.get("content-length")
-    if declared_length is not None:
-        try:
-            if int(declared_length) > maximum_bytes:
-                raise MetaEmbeddedSignupExchangeResponseTooLargeError(
-                    "Meta Embedded Signup response is too large"
-                )
-        except ValueError:
-            pass
-
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in response.aiter_raw():
-        if len(chunk) > maximum_bytes - size:
-            raise MetaEmbeddedSignupExchangeResponseTooLargeError(
-                "Meta Embedded Signup response is too large"
-            )
-        size += len(chunk)
-        chunks.append(chunk)
-    return b"".join(chunks)
