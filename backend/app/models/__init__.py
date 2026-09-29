@@ -205,6 +205,40 @@ class WhatsAppConnection(Timestamps, Base):
     )
 
 
+class EmbeddedSignupAttempt(Base):
+    """A single-use application correlation nonce for Meta Embedded Signup."""
+
+    __tablename__ = "embedded_signup_attempts"
+    __table_args__ = (
+        Index("ix_embedded_signup_attempts_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    nonce_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
 class Customer(Timestamps, Base):
     __tablename__ = "customers"
     __table_args__ = (UniqueConstraint("business_id", "phone", name="uq_customer_business_phone"),)

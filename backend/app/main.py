@@ -15,6 +15,7 @@ from app.api.v1.google_integrations import (
 )
 from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.admin_sessions import router as admin_sessions_router
+from app.api.v1.embedded_signup import router as embedded_signup_router
 from app.api.v1.google_admin_auth import router as google_admin_auth_router
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -43,6 +44,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     app.include_router(google_callback_router, prefix="/api/v1")
     app.include_router(onboarding_router, prefix="/api/v1")
     app.include_router(admin_sessions_router, prefix="/api/v1")
+    app.include_router(embedded_signup_router, prefix="/api/v1")
     app.include_router(google_admin_auth_router, prefix="/api/v1")
 
     @app.get("/health")

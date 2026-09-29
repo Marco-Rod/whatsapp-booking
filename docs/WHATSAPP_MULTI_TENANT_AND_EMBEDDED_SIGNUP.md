@@ -201,24 +201,55 @@ No hay cambio de schema justificado para A6. WAAC/PMA sigue siendo una
 preocupación de compatibilidad; no se añadirán campos especulativos hasta que
 la API verificada los requiera.
 
-## 8. A6.2 proposed design
+## 8. A6.2 — Backend security boundary
 
-**Estado:** planned.
+**Estado:** implemented locally, pending review/commit.
+**Migración:** `0013_embedded_signup_attempts` (aditiva; aún no aplicada en
+producción).
 
-La frontera backend propuesta precede todo exchange Meta real:
+La frontera backend precede todo exchange Meta real:
 
 ```text
 EmbeddedSignupAttempt
-  id, business_id, opaque nonce/state, expires_at, consumed_at, created_at
+  id, business_id, nonce_hash, expires_at, consumed_at, created_at
 
 POST /admin/whatsapp/embedded-signup/start
 POST /admin/whatsapp/embedded-signup/complete
 ```
 
-`complete` recibe authorization code y candidate account/phone number IDs,
-pero nunca un `business_id` autoritativo. El negocio procede de sesión
-administrativa. El snippet observado no demuestra un round-trip OAuth `state`
-tradicional, por lo que no se debe inventar ese comportamiento.
+`start` requiere `admin_session`, deriva `business_id` del administrador y
+devuelve una vez un nonce criptográficamente aleatorio. El servidor guarda
+solamente su hash SHA-256, asociado al negocio, con TTL configurable (600 s
+por defecto). El nonce es una correlación interna de aplicación; no afirma
+ser ni reemplaza un OAuth `state` de Meta.
+
+`complete` exige la misma sesión administrativa y recibe nonce,
+authorization code y los IDs candidatos de cuenta y teléfono. Nunca acepta
+un `business_id` autoritativo. La fila se consume con un `UPDATE` condicional
+atómico: otro negocio, intento expirado, nonce desconocido o replay se
+rechazan; dos solicitudes concurrentes sólo pueden obtener un éxito. No se
+llama a Meta, no se intercambia ni persiste el code y no se crea/modifica
+`WhatsAppConnection` en esta fase.
+
+La cobertura A6.2 comprueba inicio autenticado, aislamiento Business A/B,
+hash en reposo, expiración, replay, consumo concurrente, validación de
+payload y rechazo temprano de body sobredimensionado sin adquirir sesión de
+base de datos. Las regresiones A1–A5 continúan verificando que el runtime de
+WhatsApp no usa globals legacy.
+
+El body de `complete` está limitado a 16 KiB tanto en Caddy como mediante
+lectura streaming en FastAPI. `413` y desconexiones ocurren antes de sesión
+de base de datos; los errores estructurales siguen usando `422`. Los detalles
+de validación no reflejan el authorization code.
+
+Los intentos expirados o consumidos conservan por ahora sólo metadatos no
+secretos para trazabilidad de la fase; no existe aún un scheduler de purga.
+El TTL se aplica en la autorización y la retención/purga acotada se decidirá
+antes de habilitar onboarding externo masivo.
+
+**Siguiente checkpoint:** A6.3 definirá el exchange Meta server-to-server y
+la verificación de ownership de activos dentro de una transacción que no
+deje una conexión parcialmente habilitada.
 
 ## 9. Remaining external requirements
 
@@ -248,7 +279,7 @@ rollback/recuperación. Este documento no expone valores de producción.
 | A5 | completed | `ad47be1ee5d45a7f0a98a0539c3c887ae1de3640` | Remove runtime bridge | yes |
 | A6.0 | completed | documentation/research | Flow research | n/a |
 | A6.1 | completed | console verification | Meta Console Readiness | n/a |
-| A6.2 | planned | planned | Backend security boundary | no |
+| A6.2 | implemented locally | pending review/commit | Ephemeral signup asset-correlation boundary | no |
 
 ## 12. Updating this document
 

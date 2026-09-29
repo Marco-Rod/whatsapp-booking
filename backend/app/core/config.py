@@ -17,6 +17,15 @@ class Settings(BaseSettings):
         default=32_768,
         gt=0,
     )
+    embedded_signup_attempt_ttl_seconds: int = Field(
+        default=600,
+        gt=0,
+        le=3_600,
+    )
+    embedded_signup_max_body_bytes: int = Field(
+        default=16_384,
+        gt=0,
+    )
     api_docs_enabled: bool = True
 
     whatsapp_verify_token: SecretStr = SecretStr("")
